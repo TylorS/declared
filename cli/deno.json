@@ -1,0 +1,6 @@
+{
+  "name": "@declared/cli",
+  "exports": {
+    ".": "./mod.ts"
+  }
+}

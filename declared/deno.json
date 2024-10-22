@@ -1,0 +1,30 @@
+{
+  "name": "@declared/core",
+  "tasks": {},
+  "exports": {
+    ".": "./mod.ts",
+    "./array": "./array/mod.ts",
+    "./cause": "./cause/mod.ts",
+    "./context": "./context/mod.ts",
+    "./data": "./data/mod.ts",
+    "./effect": "./effect/mod.ts",
+    "./either": "./either/mod.ts",
+    "./exit": "./exit/mod.ts",
+    "./function": "./function/mod.ts",
+    "./map": "./map/mod.ts",
+    "./record": "./record/mod.ts",
+    "./schema": "./schema/mod.ts",
+    "./server": "./server/mod.ts",
+    "./set": "./set/mod.ts",
+    "./stream": "./stream/mod.ts",
+    "./string": "./string/mod.ts",
+    "./tag": "./tag/mod.ts",
+    "./template": "./template/mod.ts"
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"],
+      "exclude": ["no-explicit-any"]
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "@declared/storybook",
+  "imports": {},
+  "exports": {
+    ".": "./mod.ts"
+  }
+}

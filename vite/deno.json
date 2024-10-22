@@ -1,0 +1,8 @@
+{
+  "name": "@declared/vite",
+  "tasks": {},
+  "imports": {},
+  "exports": {
+    ".": "./mod.ts"
+  }
+}
