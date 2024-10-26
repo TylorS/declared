@@ -1,7 +1,7 @@
 import * as Cause from "@declared/cause";
 import type { Effect } from "@declared/effect";
 import type { Exit } from "@declared/exit";
-import { OnceIterator, ThisIterable } from "../internal/generators.ts";
+import { AsCauseIterable, ThisIterable } from "../internal/generators.ts";
 
 export type Data<Error, Output> =
   | NoData
@@ -10,27 +10,33 @@ export type Data<Error, Output> =
   | Retrying<Error>
   | Refreshing<Output>;
 
-export interface NoData extends Effect<never, NoData, never> {
+export interface NoData extends Error, Effect<never, NoData, never> {
   readonly tag: "NoData";
 }
 
-export const NoData: NoData = new (class implements NoData {
+class NoDataImpl extends AsCauseIterable<NoData> implements NoData {
   readonly tag = "NoData";
-  [Symbol.iterator] = (): Iterator<Cause.Cause<NoData>, never> =>
-    new OnceIterator(Cause.expected<NoData>(this));
-})();
+  constructor() {
+    super(Cause.expected, "NoData");
+  }
+}
 
-export interface Loading extends Effect<never, Loading, never> {}
+export const noData = (): NoData => new NoDataImpl();
 
-export const Loading: Loading = new (class implements Loading {
+export interface Loading extends Error, Effect<never, Loading, never> {}
+
+class LoadingImpl extends AsCauseIterable<Loading> implements Loading {
   readonly tag = "Loading";
-  [Symbol.iterator] = (): Iterator<Cause.Cause<Loading>, never> =>
-    new OnceIterator(Cause.expected<Loading>(this));
-})();
+  constructor() {
+    super(Cause.expected, "Loading");
+  }
+}
 
-export interface Retrying<Error> extends Effect<never, Error, never> {
+export const loading = (): Loading => new LoadingImpl();
+
+export interface Retrying<E> extends Error, Effect<never, E, never> {
   readonly tag: "Retrying";
-  readonly cause: Cause.Cause<Error>;
+  readonly cause: Cause.Cause<E>;
 }
 
 export interface Refreshing<Output> extends Effect<never, never, Output> {
@@ -38,11 +44,15 @@ export interface Refreshing<Output> extends Effect<never, never, Output> {
   readonly output: Output;
 }
 
+class RetryingImpl<E> extends AsCauseIterable<E> implements Retrying<E> {
+  readonly tag = "Retrying";
+  constructor(override readonly cause: Cause.Cause<E>) {
+    super(() => cause, "Retrying");
+  }
+}
+
 export function retrying<Error>(cause: Cause.Cause<Error>): Retrying<Error> {
-  const retrying = Object.create(ThisIterable);
-  retrying.tag = "Retrying";
-  retrying.cause = cause;
-  return retrying;
+  return new RetryingImpl(cause);
 }
 
 export function refreshing<const Output>(output: Output): Refreshing<Output> {

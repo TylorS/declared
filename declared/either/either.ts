@@ -1,32 +1,32 @@
-import type { Effect } from "@declared/effect";
-import { ThisIterable } from "../internal/generators.ts";
+import type { Effect } from "../effect/effect.ts";
+import { ErrorIterable, ThisIterable } from "../internal/generators.ts";
 
 export type Either<Error, Success> = Left<Error> | Right<Success>;
 
-export interface Left<out Error> extends Effect<never, Error, never> {
-  readonly tag: "Left";
-  readonly left: Error;
+export interface Left<out E> extends Effect<never, E, never> {
+  readonly _id: "Left";
+  readonly value: E;
 }
 
 export interface Right<out Success> extends Effect<never, never, Success> {
-  readonly tag: "Right";
-  readonly right: Success;
+  readonly _id: "Right";
+  readonly value: Success;
 }
 
-export function left<Error, Success = never>(
+export function left<const Error>(
   error: Error,
-): Either<Error, Success> {
-  const left = Object.create(ThisIterable);
-  left.tag = "Left";
-  left.left = error;
+): Left<Error> {
+  const left = Object.create(ErrorIterable.prototype);
+  left._id = "Left";
+  left.value = error;
   return left;
 }
 
-export function right<const Success, Error = never>(
+export function right<const Success>(
   success: Success,
-): Either<Error, Success> {
-  const right = Object.create(ThisIterable);
-  right.tag = "Right";
-  right.right = success;
+): Right<Success> {
+  const right = Object.create(ThisIterable.prototype);
+  right._id = "Right";
+  right.value = success;
   return right;
 }

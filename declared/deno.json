@@ -1,6 +1,8 @@
 {
   "name": "@declared/core",
-  "tasks": {},
+  "tasks": {
+    "test": "vitest run"
+  },
   "exports": {
     ".": "./mod.ts",
     "./array": "./array/mod.ts",
