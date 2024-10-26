@@ -1,6 +1,6 @@
 import type { NonEmptyArray } from "@declared/array";
-import { ErrorIterable } from "../internal/generators.ts";
 import type { Effect } from "@declared/effect";
+import { AsCauseIterable, ErrorIterable } from "../internal/generators.ts";
 
 export type Cause<E> =
   | Empty
@@ -95,4 +95,15 @@ export function isCause<E = unknown>(u: unknown): u is Cause<E> {
     all_ids.has((u as any)._id);
 }
 
-export class 
+export const TaggedCause = <const Tag extends string>(tag: Tag) =>
+// deno-lint-ignore ban-types
+<Self, Properties extends Readonly<Record<string, any>> = {}>() =>
+  class extends AsCauseIterable<Self> implements Effect<never, Self, never> {
+    static readonly tag = tag;
+    readonly tag = tag;
+
+    constructor(readonly properties: Properties = {} as Properties) {
+      super(expected, tag);
+    }
+  };
+
