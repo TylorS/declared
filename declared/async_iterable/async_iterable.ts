@@ -43,9 +43,11 @@ export const Yieldable = <const Id extends string>(id: Id) =>
   };
 
 export const Failure = <const Id extends string>(id: Id) =>
-  class Failure<E = void> extends ErrorIterable {
+  class<E = void> extends ErrorIterable {
     static readonly _id: Id = id;
     readonly _id: Id = id;
+
+    override readonly name = id;
 
     constructor(
       override readonly cause: E,
@@ -56,8 +58,7 @@ export const Failure = <const Id extends string>(id: Id) =>
   };
 
 export const AggregateFailure = <const Id extends string>(id: Id) =>
-  class AggregateFailure<E extends Iterable<any>>
-    extends AggregateErrorIterable {
+  class<E extends Iterable<any>> extends AggregateErrorIterable {
     static readonly _id: Id = id;
     readonly _id: Id = id;
 

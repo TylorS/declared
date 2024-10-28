@@ -6,6 +6,7 @@ import { Tag } from "@declared/tag";
 import { expect } from "jsr:@std/expect";
 import assert from "node:assert";
 import * as Effect from "./effect.ts";
+import { stringify } from "../internal/stringify.ts";
 
 // Helper for type tests
 const expectType = <T>(_value: T) => {
@@ -89,9 +90,8 @@ Deno.test("Effect - context management", async (t) => {
       await Effect.run(UnknownService as any);
       throw new Error("Should not succeed");
     } catch (error) {
-      assert(error instanceof Error);
-      console.log(error.toString());
-      assert(error.toString().includes("Service not found"));
+      console.log(stringify(error));
+      assert(stringify(error).includes("Service not found"));
     }
   });
 });
