@@ -294,3 +294,12 @@ export const map = <A, B>(
 ) =>
 <R, E>(effect: Effect<R, E, A>): Effect<R, E, B> =>
   effect.pipe(AsyncIterable.map(f));
+
+export const flatMap = <A, R2, E2, B>(
+  f: (a: A) => Effect<R2, E2, B>,
+) =>
+<R, E>(effect: Effect<R, E, A>): Effect<R | R2, E | E2, B> =>
+  AsyncIterable.make(async function* () {
+    const a = yield* effect;
+    return yield* f(a);
+  });
