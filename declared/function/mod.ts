@@ -653,3 +653,7 @@ export function flow(
   }
   return;
 }
+
+export const identity = <const T>(t: T): T => t;
+
+export const second = <const T, const U>(_t: T, u: U): U => u;

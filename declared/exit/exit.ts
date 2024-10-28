@@ -1,34 +1,22 @@
+import * as AsyncIterable from "@declared/async_iterable";
 import * as Cause from "@declared/cause";
-import type { Effect } from "../effect/effect.ts";
-import { ThisIterable } from "../internal/generators.ts";
-import type { Pipeable } from "@declared/pipeable";
 
 export type Exit<Error, Output> = Failure<Error> | Success<Output>;
 
-export interface Failure<out E> extends Error, Effect<never, E, never> {
-  readonly _id: "Failure";
-  readonly cause: Cause.Cause<E>;
+export declare namespace Exit {
+  export type GetError<Exit> = [Exit] extends [Failure<infer Error>] ? Error
+    : never;
+
+  export type GetOutput<Exit> = [Exit] extends [Success<infer Output>] ? Output
+    : never;
 }
 
-export interface Success<out Output> extends Pipeable {
-  readonly _id: "Success";
-  readonly value: Output;
-}
+export class Failure<const Error>
+  extends AsyncIterable.Failure("Failure")<Cause.Cause<Error>> {}
 
-export function failure<Error, Output = never>(
-  error: Cause.Cause<Error>,
-): Exit<Error, Output> {
-  const failure = Object.create(ThisIterable);
-  failure._id = "Failure";
-  failure.error = error;
-  return failure;
-}
-
-export function success<const Output, Error = never>(
-  value: Output,
-): Exit<Error, Output> {
-  const success = Object.create(ThisIterable);
-  success._id = "Success";
-  success.value = value;
-  return success;
+export class Success<const Output>
+  extends AsyncIterable.Yieldable("Success")<Output> {
+  constructor(readonly value: Output) {
+    super();
+  }
 }

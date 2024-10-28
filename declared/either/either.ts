@@ -1,32 +1,22 @@
-import type { Effect } from "../effect/effect.ts";
-import { ErrorIterable, ThisIterable } from "../internal/generators.ts";
+import * as AsyncIterable from "../async_iterable/async_iterable.ts";
 
 export type Either<Error, Success> = Left<Error> | Right<Success>;
 
-export interface Left<out E> extends Effect<never, E, never> {
-  readonly _id: "Left";
-  readonly value: E;
+export declare namespace Either {
+  export type GetLeft<T> = [T] extends [never] ? never
+    : T extends Left<infer E> ? E
+    : never;
+
+  export type GetRight<T> = [T] extends [never] ? never
+    : T extends Right<infer S> ? S
+    : never;
 }
 
-export interface Right<out Success> extends Effect<never, never, Success> {
-  readonly _id: "Right";
-  readonly value: Success;
-}
+export class Left<const Error> extends AsyncIterable.Failure("Left")<Error> {}
 
-export function left<const Error>(
-  error: Error,
-): Left<Error> {
-  const left = Object.create(ErrorIterable.prototype);
-  left._id = "Left";
-  left.value = error;
-  return left;
-}
-
-export function right<const Success>(
-  success: Success,
-): Right<Success> {
-  const right = Object.create(ThisIterable.prototype);
-  right._id = "Right";
-  right.value = success;
-  return right;
+export class Right<const Success>
+  extends AsyncIterable.Yieldable(`Right`)<Success> {
+  constructor(readonly value: Success) {
+    super();
+  }
 }

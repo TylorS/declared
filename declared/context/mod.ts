@@ -1,6 +1,7 @@
+import * as AsyncIterable from "@declared/async_iterable";
+import * as Option from "@declared/option";
 import { type Pipeable, pipeArguments } from "@declared/pipeable";
 import type { Tag } from "../tag/tag.ts";
-import * as Option from "@declared/option";
 
 export const TypeId = Symbol.for("@declared/Context");
 
@@ -61,3 +62,15 @@ export const get = <Identifier, Service>(
   context.services.has(tag)
     ? Option.some(context.services.get(tag)!)
     : Option.none();
+
+export class GetContext<R>
+  extends AsyncIterable.Yieldable(`GetContext`)<Context<R>> {}
+
+export class ProvideContext<R>
+  extends AsyncIterable.Yieldable(`ProvideContext`)<void> {
+  constructor(readonly context: Context<R>) {
+    super();
+  }
+}
+
+export class PopContext extends AsyncIterable.Yieldable(`PopContext`)<void> {}

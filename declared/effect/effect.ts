@@ -1,246 +1,296 @@
+import * as AsyncIterable from "@declared/async_iterable";
 import * as Cause from "@declared/cause";
 import * as Context from "@declared/context";
-import * as Either from "@declared/either";
-import * as Exit from "@declared/exit";
+import type { Either } from "@declared/either";
+import { type Exit, Failure, Success } from "@declared/exit";
+import type { Fiber } from "@declared/fiber";
+import type { LocalVar } from "@declared/local_var";
+import * as LocalVars from "@declared/local_vars";
 import * as Option from "@declared/option";
-import { type Pipeable, pipeArguments } from "@declared/pipeable";
-import type * as Tag from "@declared/tag";
-import { EffectFailure } from "../internal/effect_failure.ts";
-import { MapIterable } from "../internal/generators.ts";
-import { stringify } from "../internal/stringify.ts";
-import { flow } from "../mod.ts";
+import { pipeArguments } from "@declared/pipeable";
+import * as Scope from "@declared/scope";
+import * as Stack from "@declared/stack";
+import type { Tag } from "@declared/tag";
 
-export interface Effect<Resources, Error, Success> extends Pipeable {
-  readonly [Symbol.asyncIterator]: () => Effect.Iterator<
-    Effect.Instruction<Resources, Error, Success>,
-    Success
-  >;
-}
-
-const Proto = {
-  pipe() {
-    return pipeArguments(this, arguments);
-  },
-};
-
-export function gen<
-  Yield extends Effect.Instruction<any, any, any>,
-  Success,
->(
-  f: () => AsyncGenerator<Yield, Success>,
-): Effect<
-  Effect.Instruction.Resources<Yield>,
-  Effect.Instruction.Error<Yield>,
-  Success
-> {
-  const effect = Object.create(Proto);
-  effect[Symbol.asyncIterator] = f;
-  return effect;
-}
+export interface Effect<out R, out E, out A>
+  extends AsyncIterable.AsyncIterable<Effect.Instruction<R, E, any>, A> {}
 
 export declare namespace Effect {
-  export type Instruction<Resources, Error, Success> =
-    | Cause.Cause<Error>
-    | Either.Either<Error, Success>
-    | Exit.Exit<Error, Success>
-    | Option.Option<Success>
-    | Tag.Tag<Resources, Success>;
-
-  export namespace Instruction {
-    export type Resources<T> = [T] extends [Tag.Tag<infer _Resources, any>]
-      ? _Resources
-      : never;
-
-    export type Error<T> = [T] extends [Cause.Cause<infer _Error>] ? _Error
-      : [T] extends [Either.Left<infer _Error>] ? _Error
-      : [T] extends [Exit.Exit<infer _Error, any>] ? _Error
-      : never;
-
-    export type Success<T> = [T] extends [Instruction<any, any, infer _Success>]
-      ? _Success
-      : never;
-  }
-
-  export type Resources<T> = T extends Effect<infer _Resources, any, any>
-    ? _Resources
-    : never;
-
-  export type Error<T> = T extends Effect<any, infer _Error, any> ? _Error
-    : never;
-
-  export type Success<T> = T extends Effect<any, any, infer _Success> ? _Success
-    : never;
-
-  export interface Iterator<I, O> extends globalThis.AsyncIterator<I, O> {
-    throw: NonNullable<globalThis.AsyncIterator<I, O>["throw"]>;
-    return: NonNullable<globalThis.AsyncIterator<I, O>["return"]>;
-  }
+  export type Instruction<R, E, A> =
+    | Tag<R, A>
+    | Cause.Cause<E>
+    | Either<E, A>
+    | Exit<E, A>
+    | Option.Option<A>
+    | LocalVar<A>
+    | LocalVars.GetLocalVars
+    | Context.GetContext<R>
+    | Context.ProvideContext<any>
+    | Context.PopContext
+    | Scope.GetScope;
 }
 
-export async function run<Error, Success>(
-  effect: Effect<never, Error, Success>,
-): Promise<Success> {
-  const generator = effect[Symbol.asyncIterator]();
-  let result = await generator.next();
+export interface Runtime<R> extends ReturnType<typeof makeRuntime<R>> {}
 
-  const onSuccess = async (value: any) => {
-    result = await generator.next(value);
-  };
+export function makeRuntime<R>(
+  initialContext: Context.Context<R>,
+  initialLocalVars: LocalVars.LocalVars,
+  initialScope: Scope.Scope,
+) {
+  function runFork<E, A>(effect: Effect<R, E, A>): Fiber<E, A> {
+    const fiber = new FiberRuntime(
+      new Stack.Stack(initialContext, null),
+      initialLocalVars,
+      initialScope.extend(),
+      effect,
+    );
 
-  const onFailure = async (error: Cause.Cause<any>) => {
-    try {
-      result = await generator.throw(error);
-    } catch (e) {
-      throw getEffectFailure(e);
+    fiber.start();
+    return fiber;
+  }
+
+  return {
+    runFork,
+    runExit: <E, A>(effect: Effect<R, E, A>): Promise<Exit<E, A>> =>
+      Promise.resolve(runFork(effect)),
+    run: async <E = never, A = never>(effect: Effect<R, E, A>): Promise<A> => {
+      const fiber = runFork(effect);
+      const exit = await fiber;
+      if (exit._id === "Success") {
+        return exit.value;
+      }
+      return Promise.reject(exit.cause);
+    },
+    [Symbol.asyncDispose]: () => initialScope[Symbol.asyncDispose](),
+  } as const;
+}
+
+type DeferredPromise<T> = ReturnType<typeof Promise.withResolvers<T>>;
+
+class FiberRuntime<E, A> implements Fiber<E, A> {
+  private _exit: DeferredPromise<Exit<E, A>>;
+  private _exited: boolean = false;
+  private _iterator: AsyncIterator<Effect.Instruction<any, E, any>, A>;
+  private _result!: IteratorResult<Effect.Instruction<any, E, any>, A>;
+
+  constructor(
+    private stack: Stack.Stack<Context.Context<any>>,
+    private localVars: LocalVars.LocalVars,
+    private scope: Scope.Scope,
+    effect: Effect<any, E, A>,
+  ) {
+    this._exit = Promise.withResolvers();
+    this._iterator = AsyncIterable.iterator(effect);
+  }
+
+  then<TResult1 = Exit<E, A>, TResult2 = never>(
+    onfulfilled?:
+      | ((value: Exit<E, A>) => TResult1 | PromiseLike<TResult1>)
+      | null
+      | undefined,
+    onrejected?:
+      | ((reason: unknown) => TResult2 | PromiseLike<TResult2>)
+      | null
+      | undefined,
+  ): Promise<TResult1 | TResult2> {
+    return this._exit.promise.then(onfulfilled, onrejected);
+  }
+
+  [Symbol.asyncIterator] = async function* (this: FiberRuntime<E, A>) {
+    const vars = yield* new LocalVars.GetLocalVars();
+    const exit = await this._exit.promise;
+    const a = (yield exit) as A;
+    vars.join(this.localVars);
+    return a;
+  }.bind(this);
+
+  [Symbol.asyncDispose] = async function (this: FiberRuntime<E, A>) {
+    if (this._iterator.return) {
+      await this._iterator.return();
     }
-  };
 
-  while (!result.done) {
-    const instruction = result.value;
+    await this.scope[Symbol.asyncDispose]();
+  }.bind(this);
+
+  pipe() {
+    return pipeArguments(this, arguments);
+  }
+
+  async start() {
+    try {
+      this._result = await this._iterator.next();
+      await this.eventLoop();
+    } finally {
+      await this[Symbol.asyncDispose]();
+    }
+  }
+
+  private async eventLoop() {
+    while (!this._result.done && !this._exited) {
+      await this.step(this._result.value);
+    }
+
+    if (this._exited) {
+      return;
+    }
+
+    await this.onExit(new Success(this._result.value as A));
+  }
+
+  private step(instruction: Effect.Instruction<any, E, any>) {
     switch (instruction._id) {
+      case "Some":
       case "Right":
       case "Success":
-      case "Some": {
-        await onSuccess(instruction.value);
-        break;
-      }
-      case "Tag": {
-        await onFailure(
-          Cause.unexpected(
-            new Error(`No service provided for ${instruction.identifier}`),
-          ),
-        );
-        break;
-      }
-      case "Failure": {
-        await onFailure(instruction.cause);
-        break;
-      }
-      case "Left": {
-        await onFailure(Cause.expected(instruction.value));
-        break;
-      }
-      case "None": {
-        await onFailure(Cause.empty);
-        break;
-      }
-      case "Empty":
-      case "Interrupted":
+        return this.stepSuccess(instruction.value);
+      case "Failure":
+        return this.stepCause(instruction.cause);
+      case "GetContext":
+        return this.stepGetContext(instruction);
+      case "ProvideContext":
+        return this.stepProvideContext(instruction);
+      case "PopContext":
+        return this.stepPopContext(instruction);
+      case "Tag":
+        return this.stepTag(instruction);
+      case "GetScope":
+        return this.stepSuccess(this.scope);
+      case "GetLocalVars":
+        return this.stepGetLocalVars(instruction);
+      case "LocalVar":
+        return this.stepLocalVar(instruction);
+      case "None":
+        return this.stepCause(new Cause.Empty());
+      case "Left":
+        return this.stepCause(new Cause.Expected(instruction.cause));
+      case "Unexpected":
       case "Concurrent":
-      case "Sequential":
+      case "Empty":
       case "Expected":
-      case "Unexpected": {
-        await onFailure(instruction);
-        break;
-      }
-      default: {
-        await onFailure(
-          Cause.unexpected(
-            new Error(`Unhandled instruction: ${stringify(instruction)}`),
-          ),
-        );
-      }
+      case "Interrupted":
+      case "Sequential":
+        return this.stepCause(instruction);
+      default:
+        throw new Error(`Unhandled instruction: ${instruction}`);
     }
   }
 
-  return result.value;
-}
+  private async stepSuccess(value: any) {
+    this._result = await this._iterator.next(value);
+  }
 
-function getEffectFailure(u: unknown): EffectFailure<unknown> {
-  if (Cause.isCause(u)) return new EffectFailure(u);
-  if (u instanceof EffectFailure) return u;
-  return new EffectFailure(Cause.unexpected(u));
-}
+  private async stepCause(cause: Cause.Cause<E>) {
+    if (this._iterator.throw) {
+      try {
+        this._result = await this._iterator.throw!(cause);
+      } catch {
+        await this.onExit(new Failure(cause));
+      }
+    } else {
+      await this.onExit(new Failure(cause));
+    }
+  }
 
-export function succeed<const Success>(
-  value: Success,
-): Effect<never, never, Success> {
-  return Either.right(value);
-}
+  private async stepGetContext(_: Context.GetContext<any>) {
+    this._result = await this._iterator.next(this.stack.value);
+  }
 
-export function fail<const Error>(error: Error): Effect<never, Error, never> {
-  return Either.left(error);
-}
+  private async stepProvideContext(_: Context.ProvideContext<any>) {
+    this.stack = Stack.push(this.stack, _.context);
+    this._result = await this._iterator.next();
+  }
 
-export const interrupt: Effect<never, never, never> = Cause.interrupted;
+  private async stepPopContext(_: Context.PopContext) {
+    this.stack = Stack.pop(this.stack) ?? this.stack;
+    this._result = await this._iterator.next();
+  }
 
-class MapEffect<R, E, A, B>
-  extends MapIterable<Effect.Instruction<R, E, any>, A, B>
-  implements Effect<R, E, B> {
-  constructor(
-    readonly effect: Effect<R, E, A>,
-    map: (a: A) => B,
-  ) {
-    super(effect, map);
+  private async stepTag(_: Tag<any, any>) {
+    const service = this.stack.value.pipe(Context.get(_));
+    if (Option.isNone(service)) {
+      return await this.stepCause(
+        new Cause.Unexpected(new Error(`Service not found: ${_.identifier}`)),
+      );
+    }
+
+    this._result = await this._iterator.next(service.value);
+  }
+
+  private async stepGetLocalVars(_: LocalVars.GetLocalVars) {
+    this._result = await this._iterator.next(this.localVars);
+  }
+
+  private async stepLocalVar(_: LocalVar<any>) {
+    this._result = await this._iterator.next(this.localVars.get(_));
+  }
+
+  private onExit(exit: Exit<E, A>) {
+    if (this._exited) {
+      return;
+    }
+
+    this._exited = true;
+    switch (exit._id) {
+      case "Success":
+        return this.onExitSuccess(exit);
+      case "Failure":
+        return this.onExitFailure(exit);
+    }
+  }
+
+  private async onExitSuccess(exit: Success<A>) {
+    try {
+      await this.scope[Symbol.asyncDispose]();
+      this._exit.resolve(exit);
+    } catch (error) {
+      this._exit.resolve(new Failure<never>(new Cause.Unexpected(error)));
+    }
+  }
+
+  private async onExitFailure(exit: Failure<E>) {
+    try {
+      await this.scope[Symbol.asyncDispose]();
+      this._exit.resolve(exit);
+    } catch (error) {
+      this._exit.resolve(
+        new Failure<never>(
+          new Cause.Sequential([exit.cause, new Cause.Unexpected(error)]),
+        ),
+      );
+    }
   }
 }
 
-export function map<A, const B>(
+export const succeed = <const A>(a: A): Effect<never, never, A> =>
+  new Success(a);
+
+export const failure = <E>(
+  cause: Cause.Cause<E>,
+): Effect<never, E, never> => new Failure(cause);
+
+export const interrupt = (): Effect<never, never, never> =>
+  failure<never>(new Cause.Interrupted());
+
+export const unexpected = (error: unknown): Effect<never, never, never> =>
+  failure<never>(new Cause.Unexpected(error));
+
+export const suspend = <R, E, A>(f: () => Effect<R, E, A>): Effect<R, E, A> =>
+  AsyncIterable.make(() => f()[Symbol.asyncIterator]());
+
+export const none = suspend(() => failure(new Cause.Empty()));
+
+export const expected = <const E>(error: E) =>
+  failure(new Cause.Expected(error));
+
+export const {
+  runFork,
+  runExit,
+  run,
+  [Symbol.asyncDispose]: interruptRootFibers,
+} = makeRuntime(Context.empty, LocalVars.make(), Scope.make());
+
+export const map = <A, B>(
   f: (a: A) => B,
-): <R, E>(effect: Effect<R, E, A>) => Effect<R, E, B> {
-  return (effect) =>
-    effect instanceof MapEffect
-      // Functor law
-      ? new MapEffect(effect.effect, flow(effect.map, f))
-      : new MapEffect(effect, f);
-}
-
-export function flatMap<A, R2, E2, B>(
-  f: (a: A) => Effect<R2, E2, B>,
-): <R, E>(effect: Effect<R, E, A>) => Effect<R2 | R, E2 | E, B> {
-  return (effect) => {
-    if (effect instanceof MapEffect) {
-      return flatMapMapEffect(effect, f);
-    }
-
-    return flatMapAny(effect, f);
-  };
-}
-
-export function provideContext<R2>(context: Context.Context<R2>): <R, E, A>(
-  effect: Effect<R, E, A>,
-) => Effect<R2 | R, E, A> {
-  return (effect) =>
-    gen(async function* () {
-      const generator = effect[Symbol.asyncIterator]();
-      let result = await generator.next();
-
-      while (!result.done) {
-        const instruction = result.value;
-        switch (instruction._id) {
-          case "Tag": {
-            const service = context.pipe(Context.get(instruction));
-            if (Option.isSome(service)) {
-              result = await generator.next(service.value);
-            } else {
-              result = yield instruction;
-            }
-            break;
-          }
-          default: {
-            result = await generator.next(instruction);
-          }
-        }
-      }
-
-      return result.value;
-    });
-}
-
-function flatMapMapEffect<R, E, A, R2, E2, B>(
-  effect: MapEffect<R, E, any, A>,
-  f: (a: A) => Effect<R2, E2, B>,
-): Effect<R2 | R, E2 | E, B> {
-  return gen(async function* () {
-    return yield* f(effect.map(yield* effect.effect));
-  });
-}
-
-function flatMapAny<R, E, A, R2, E2, B>(
-  effect: Effect<R, E, A>,
-  f: (a: A) => Effect<R2, E2, B>,
-): Effect<R2 | R, E2 | E, B> {
-  return gen(async function* () {
-    return yield* f(yield* effect);
-  });
-}
+) =>
+<R, E>(effect: Effect<R, E, A>): Effect<R, E, B> =>
+  effect.pipe(AsyncIterable.map(f));

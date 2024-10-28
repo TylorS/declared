@@ -1,9 +1,7 @@
-import { type Pipeable, pipeArguments } from "@declared/pipeable";
-import type { Effect } from "../effect/effect.ts";
-import type { Cause } from "@declared/cause";
+import { type Pipeable, pipeArguments } from "../pipeable/mod.ts";
 
 export class ThisIterable<out O> implements Pipeable {
-  [Symbol.asyncIterator](): Effect.Iterator<this, O> {
+  [Symbol.asyncIterator](): AsyncIterator<this, O> {
     return new OnceIterator<this, O>(this);
   }
 
@@ -12,7 +10,7 @@ export class ThisIterable<out O> implements Pipeable {
   }
 }
 
-export class OnceIterator<I, O> implements Effect.Iterator<I, O> {
+export class OnceIterator<I, O> implements AsyncIterator<I, O> {
   done = false;
 
   constructor(readonly value: I) {}
@@ -42,7 +40,7 @@ export class ErrorIterable extends Error implements Pipeable {
     super(message, options);
   }
 
-  [Symbol.asyncIterator](): Effect.Iterator<this, never> {
+  [Symbol.asyncIterator](): AsyncIterator<this, never> {
     return new OnceIterator(this);
   }
 
@@ -51,17 +49,13 @@ export class ErrorIterable extends Error implements Pipeable {
   }
 }
 
-export class AsCauseIterable<Self> extends Error implements Pipeable {
-  constructor(
-    readonly map: (error: Self) => Cause<Self>,
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
+export class AggregateErrorIterable extends AggregateError implements Pipeable {
+  constructor(errors: Array<any>, message?: string, options?: ErrorOptions) {
+    super(errors, message, options);
   }
 
-  [Symbol.asyncIterator](): Effect.Iterator<Cause<Self>, never> {
-    return new OnceIterator(this.map(this as unknown as Self));
+  [Symbol.asyncIterator](): AsyncIterator<this, never> {
+    return new OnceIterator(this);
   }
 
   pipe() {
@@ -72,12 +66,12 @@ export class AsCauseIterable<Self> extends Error implements Pipeable {
 export class MapIterable<I, O, O2> implements Pipeable {
   constructor(
     readonly iterable: {
-      [Symbol.asyncIterator]: () => Effect.Iterator<I, O>;
+      [Symbol.asyncIterator]: () => AsyncIterator<I, O>;
     },
     readonly map: (value: O) => O2,
   ) {}
 
-  [Symbol.asyncIterator](): Effect.Iterator<I, O2> {
+  [Symbol.asyncIterator](): AsyncIterator<I, O2> {
     return new MapIterator(this.iterable[Symbol.asyncIterator](), this.map);
   }
 
@@ -86,9 +80,9 @@ export class MapIterable<I, O, O2> implements Pipeable {
   }
 }
 
-export class MapIterator<I, O, O2> implements Effect.Iterator<I, O2> {
+export class MapIterator<I, O, O2> implements AsyncIterator<I, O2> {
   constructor(
-    readonly iterator: Effect.Iterator<I, O>,
+    readonly iterator: AsyncIterator<I, O>,
     readonly map: (value: O) => O2,
   ) {}
 
@@ -97,14 +91,22 @@ export class MapIterator<I, O, O2> implements Effect.Iterator<I, O2> {
   }
 
   throw(exception: unknown): Promise<IteratorResult<I, O2>> {
-    return this.mapResult(this.iterator.throw(exception));
+    if (this.iterator.throw) {
+      return this.mapResult(this.iterator.throw(exception));
+    }
+
+    return Promise.reject(exception);
   }
 
   return(value: any): Promise<IteratorResult<I, O2>> {
-    return this.mapResult(this.iterator.return(value));
+    if (this.iterator.return) {
+      return this.mapResult(this.iterator.return(value));
+    }
+
+    return Promise.resolve({ value: this.map(value), done: true });
   }
 
-  mapResult(
+  private mapResult(
     result: Promise<IteratorResult<I, O>>,
   ): Promise<IteratorResult<I, O2>> {
     return result.then((result) => {

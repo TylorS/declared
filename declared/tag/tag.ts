@@ -1,19 +1,24 @@
-import type { Pipeable } from "@declared/pipeable";
-import type { Effect } from "../effect/effect.ts";
 import { ThisIterable } from "../internal/generators.ts";
+import type { Effect } from "../mod.ts";
 
 const globalTagMapSymbol = Symbol.for("@declared/TagMap");
-const globalTagMap = Reflect.get(globalThis, globalTagMapSymbol) ??
-  Reflect.set(globalThis, globalTagMapSymbol, new Map());
+
+let globalTagMap: Map<string, Tag<any, any>> = Reflect.get(
+  globalThis,
+  globalTagMapSymbol,
+);
+if (!globalTagMap) {
+  globalTagMap = new Map();
+  Reflect.set(globalThis, globalTagMapSymbol, globalTagMap);
+}
 
 export const TypeId = Symbol.for("@declared/Tag");
 export type TypeId = typeof TypeId;
 
-export interface Tag<out Id, out Value> extends Pipeable {
+export interface Tag<out Id, out Value>
+  extends Effect.Effect<Id, never, Value> {
   readonly _id: "Tag";
   readonly identifier: string;
-  readonly [TypeId]: Tag.Variance<Id, Value>;
-  readonly [Symbol.iterator]: () => Effect.Iterator<Tag<Id, Value>, Value>;
 }
 
 const variance: Tag.Variance<any, any> = {
@@ -27,9 +32,8 @@ export function Tag<Id, Value = Id>(identifer: string): Tag<Id, Value> {
     return existing;
   }
 
-  const tag = Object.create(ThisIterable);
-  tag._effect = "Sync";
-  tag.tag = "Tag";
+  const tag = Object.create(ThisIterable.prototype);
+  tag._id = "Tag";
   tag.identifier = identifer;
   tag[TypeId] = variance;
 
