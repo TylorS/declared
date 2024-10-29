@@ -425,12 +425,9 @@ export const catchAll = <E, R2, E2, B>(
         case "Left":
           return yield* f(new Cause.Expected(instruction.cause));
         default:
-          result = await generator.next(
-            yield result.value as Exclude<
-              Effect.Instruction<R, E, A>,
-              Effect.FailureInstruction<E>
-            >,
-          );
+          result = await generator.next(yield instruction).catch((error) => {
+            return { value: new Cause.Unexpected(error), done: false };
+          });
       }
     }
 
