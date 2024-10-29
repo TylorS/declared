@@ -63,6 +63,16 @@ export const get = <Identifier, Service>(
     ? Option.some(context.services.get(tag)!)
     : Option.none();
 
+export const merge =
+  <R2>(provided: Context<R2>) => <R>(ctx: Context<R>): Context<R | R2> => {
+    const merged = Object.create(Proto);
+    merged.services = new Map(ctx.services);
+    provided.services.forEach((service, tag) => {
+      merged.services.set(tag, service);
+    });
+    return merged;
+  };
+
 export class GetContext<R>
   extends AsyncIterable.Yieldable(`GetContext`)<Context<R>> {}
 

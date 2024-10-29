@@ -1,5 +1,6 @@
 import * as Cause from "@declared/cause";
 import * as Context from "@declared/context";
+import * as LocalVar from "@declared/local_var";
 import * as LocalVars from "@declared/local_vars";
 import * as Scope from "@declared/scope";
 import { Tag } from "@declared/tag";
@@ -7,11 +8,6 @@ import { expect } from "jsr:@std/expect";
 import assert from "node:assert";
 import * as Effect from "./effect.ts";
 import { stringify } from "../internal/stringify.ts";
-
-// Helper for type tests
-const expectType = <T>(_value: T) => {
-  // This function exists just for type checking
-};
 
 Deno.test("Effect - success cases", async (t) => {
   await t.step("succeed creates successful effect", async () => {
@@ -90,98 +86,78 @@ Deno.test("Effect - context management", async (t) => {
       await Effect.run(UnknownService as any);
       throw new Error("Should not succeed");
     } catch (error) {
-      console.log(stringify(error));
       assert(stringify(error).includes("Service not found"));
     }
   });
 });
 
-// Deno.test("Effect - fiber operations", async (t) => {
-//   await t.step("can fork and join fibers", async () => {
-//     const effect = Effect.succeed("test");
-//     const fiber = Effect.runFork(effect);
-//     const result = await fiber.join;
+Deno.test("Effect - fiber operations", async (t) => {
+  await t.step("can fork and join fibers", async () => {
+    const effect = Effect.succeed("test");
+    const fiber = Effect.runFork(effect);
+    const result = await fiber.exit;
 
-//     expect(result._id).toBe("Success");
-//     if (result._id === "Success") {
-//       expect(result.value).toBe("test");
-//     }
-//   });
+    expect(result._id).toBe("Success");
+    if (result._id === "Success") {
+      expect(result.value).toBe("test");
+    }
+  });
 
-//   await t.step("can interrupt fibers", async () => {
-//     const effect = Effect.interrupt();
-//     try {
-//       await Effect.run(effect);
-//       throw new Error("Should not succeed");
-//     } catch (error) {
-//       expect(error).toBeInstanceOf(Cause.Interrupted);
-//     }
-//   });
-// });
+  await t.step("can interrupt fibers", async () => {
+    let run = false;
+    const effect = Effect.gen(async function* test() {
+      const fiber = yield* Effect.fork(
+        Effect.fromPromise((signal) =>
+          new Promise<void>((resolve) => {
+            const id = setTimeout(() => {
+              run = true;
+              resolve();
+            }, 1000);
+            signal.addEventListener("abort", () => {
+              clearTimeout(id);
+            }, {
+              once: true,
+            });
+          })
+        ),
+      );
 
-// Deno.test("Effect - error handling", async (t) => {
-//   await t.step("can catch and recover from errors", async () => {
-//     const failedEffect = Effect.expected("oops");
-//     const recoveredEffect = failedEffect.pipe(
-//       Effect.catchAll((error) => Effect.succeed(`recovered: ${error.error}`)),
-//     );
+      expect(run).toBe(false);
+      yield* Effect.dispose(fiber);
+      const exit = await fiber.exit;
+      expect(exit._id).toBe("Failure");
+      if (exit._id === "Failure") {
+        expect(exit.cause._id).toBe("Interrupted");
+      }
 
-//     const result = await Effect.run(recoveredEffect);
-//     expect(result).toBe("recovered: oops");
-//   });
+      expect(run).toBe(false);
+    });
 
-//   await t.step("can transform errors", async () => {
-//     const failedEffect = Effect.expected("error1");
-//     const transformedEffect = failedEffect.pipe(
-//       Effect.mapError((error) => `transformed: ${error.error}`),
-//     );
+    await Effect.runExit(effect);
+  });
+});
 
-//     try {
-//       await Effect.run(transformedEffect);
-//       throw new Error("Should not succeed");
-//     } catch (error) {
-//       expect(error).toBeInstanceOf(Cause.Expected);
-//       expect(error.error).toBe("transformed: error1");
-//     }
-//   });
-// });
+Deno.test("Effect - error handling", async (t) => {
+  await t.step("can catch and recover from errors", async () => {
+    const failedEffect = Effect.expected("oops");
+    const recoveredEffect = failedEffect.pipe(
+      Effect.catchAll((error) => Effect.succeed(`recovered: ${error.message}`)),
+    );
 
-// Deno.test("Effect - type safety", async (t) => {
-//   await t.step("maintains proper type information", () => {
-//     const effect = Effect.succeed(42);
+    const result = await Effect.run(recoveredEffect);
+    expect(result).toBe(`recovered: "oops"`);
+  });
+});
 
-//     // Should compile
-//     expectType<Effect.Effect<never, never, number>>(effect);
-
-//     const failableEffect = Effect.expected("error");
-//     // Should compile
-//     expectType<Effect.Effect<never, string, never>>(failableEffect);
-
-//     const contextualEffect = Effect.serviceWith(
-//       Tag<{ value: string }>(),
-//       (s) => s.value,
-//     );
-//     // Should compile
-//     expectType<Effect.Effect<{ value: string }, never, string>>(
-//       contextualEffect,
-//     );
-//   });
-// });
-
-// Deno.test("Effect - local variables", async (t) => {
-//   await t.step("can manage local variables", async () => {
-//     const localVar = LocalVars.make();
-//     const runtime = Effect.makeRuntime(
-//       Context.empty,
-//       localVar,
-//       Effect.Scope.make(),
-//     );
-
-//     const effect = LocalVars.get(localVar).pipe(
-//       Effect.map((value) => value ?? "default"),
-//     );
-
-//     const result = await runtime.run(effect);
-//     expect(result).toBe("default");
-//   });
-// });
+Deno.test("Effect - local variables", async (t) => {
+  await t.step("can manage local variables", async () => {
+    const foo = LocalVar.make(() => "foo");
+    await Effect.run(Effect.gen(async function* () {
+      const initial = yield* foo;
+      expect(initial).toBe("foo");
+      const updated = yield* foo.pipe(Effect.set("bar"));
+      expect(updated).toBe("bar");
+      expect(updated).toBe(yield* foo);
+    }));
+  });
+});

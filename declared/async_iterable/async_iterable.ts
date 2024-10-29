@@ -4,6 +4,7 @@ import {
   ErrorIterable,
   ThisIterable,
 } from "../internal/generators.ts";
+import { stringify } from "../internal/stringify.ts";
 
 export interface AsyncIterable<Yield, Return> extends Pipeable {
   readonly [Symbol.asyncIterator]: () => AsyncIterator<
@@ -37,30 +38,33 @@ export type AnyIdObject = {
 };
 
 export const Yieldable = <const Id extends string>(id: Id) =>
-  class Yieldable<T> extends ThisIterable<T> {
+  class Yieldable<T> extends ThisIterable<T> implements Pipeable {
     static readonly _id: Id = id;
     readonly _id: Id = id;
+    override readonly pipe: Pipeable["pipe"] = super.pipe;
   };
 
 export const Failure = <const Id extends string>(id: Id) =>
-  class<E = void> extends ErrorIterable {
+  class<E = void> extends ErrorIterable implements Pipeable {
     static readonly _id: Id = id;
     readonly _id: Id = id;
-
+    override readonly pipe: Pipeable["pipe"] = super.pipe;
     override readonly name = id;
 
     constructor(
       override readonly cause: E,
       options?: ErrorOptions & { message?: string },
     ) {
-      super(options?.message ?? "Failure", options);
+      super(options?.message ?? stringify(cause), options);
     }
   };
 
 export const AggregateFailure = <const Id extends string>(id: Id) =>
-  class<E extends Iterable<any>> extends AggregateErrorIterable {
+  class<E extends Iterable<any>> extends AggregateErrorIterable
+    implements Pipeable {
     static readonly _id: Id = id;
     readonly _id: Id = id;
+    override readonly pipe: Pipeable["pipe"] = super.pipe;
 
     constructor(
       errors: E,
