@@ -5,7 +5,7 @@ import type { Tag } from "../tag/tag.ts";
 
 export const TypeId = Symbol.for("@declared/Context");
 
-export interface Context<out Resources> extends Pipeable {
+export interface Context<Resources> extends Pipeable {
   readonly [TypeId]: Context.Variance<Resources>;
 
   /**
