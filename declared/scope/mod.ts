@@ -1,5 +1,5 @@
-import { Tag } from "@declared/tag";
 import * as AsyncIterable from "@declared/async_iterable";
+import { Tag } from "@declared/tag";
 
 export interface Scope extends AsyncDisposable {
   readonly _id: "Scope";
@@ -70,3 +70,18 @@ const isSyncDisposable = (
 ): disposable is Disposable => Reflect.has(disposable, Symbol.dispose);
 
 export class GetScope extends AsyncIterable.Yieldable("GetScope")<Scope> {}
+
+export class PushInterruptStatus
+  extends AsyncIterable.Yieldable("PushInterruptStatus")<void> {
+  constructor(
+    readonly interruptStatus: boolean,
+  ) {
+    super();
+  }
+}
+
+export class PopInterruptStatus
+  extends AsyncIterable.Yieldable("PopInterruptStatus")<void> {}
+
+export class GetInterruptStatus
+  extends AsyncIterable.Yieldable(`GetInterruptStatus`)<boolean> {}

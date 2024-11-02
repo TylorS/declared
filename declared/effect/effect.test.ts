@@ -4,10 +4,12 @@ import * as LocalVar from "@declared/local_var";
 import * as LocalVars from "@declared/local_vars";
 import * as Scope from "@declared/scope";
 import { Tag } from "@declared/tag";
+import { assertEquals } from "https://deno.land/std/assert/mod.ts";
+import { delay } from "https://deno.land/std/async/delay.ts";
 import { expect } from "jsr:@std/expect";
 import assert from "node:assert";
-import * as Effect from "./effect.ts";
 import { stringify } from "../internal/stringify.ts";
+import * as Effect from "./effect.ts";
 
 Deno.test("Effect - success cases", async (t) => {
   await t.step("succeed creates successful effect", async () => {
@@ -73,6 +75,7 @@ Deno.test("Effect - context management", async (t) => {
       Context.make(NumberService, 42),
       LocalVars.make(),
       Scope.make(),
+      true,
     );
 
     const result = await runtime.run(program);
@@ -160,4 +163,29 @@ Deno.test("Effect - local variables", async (t) => {
       expect(updated).toBe(yield* foo);
     }));
   });
+});
+
+Deno.test("Effect - uninterruptable regions", async () => {
+  let executed = false;
+
+  const effect = Effect.gen(async function* () {
+    // This region cannot be interrupted
+    yield* Effect.uninterruptable(Effect.gen(async function* () {
+      await delay(50); // Simulate some work
+      executed = true;
+    }));
+  });
+
+  const fiber = Effect.runFork(effect);
+
+  // Try to interrupt immediately
+  await fiber[Symbol.asyncDispose]();
+
+  // Wait for the fiber to complete
+  const exit = await fiber.exit;
+
+  // The code in uninterruptible should have executed despite interruption
+  assertEquals(executed, true);
+  assert(exit._id === "Failure");
+  assertEquals(exit.cause, new Cause.Interrupted());
 });

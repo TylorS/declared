@@ -27,20 +27,26 @@ export declare namespace Effect {
     | Context.GetContext<R>
     | Context.ProvideContext<any>
     | Context.PopContext
-    | Scope.GetScope;
+    | Scope.GetScope
+    | Scope.GetInterruptStatus
+    | Scope.PushInterruptStatus
+    | Scope.PopInterruptStatus;
 
   export type FailureInstruction<E> = Failure<E> | Cause.Cause<E> | Left<E>;
 
-  export type GetContext<T> = [T] extends [Tag<infer R, any>] ? R
+  export type GetContext<T> = [T] extends [never] ? never
+    : [T] extends [Tag<infer R, any>] ? R
     : [T] extends [Context.GetContext<infer R>] ? R
     : never;
 
-  export type GetFailure<T> = [T] extends [Cause.Cause<infer E>] ? E
+  export type GetFailure<T> = [T] extends [never] ? never
+    : [T] extends [Cause.Cause<infer E>] ? E
     : [T] extends [Left<infer E>] ? E
     : [T] extends [Failure<infer E>] ? E
     : never;
 
-  export type GetValue<T> = [T] extends [Option.Some<infer A>] ? A
+  export type GetValue<T> = [T] extends [never] ? never
+    : [T] extends [Option.Some<infer A>] ? A
     : [T] extends [Right<infer A>] ? A
     : [T] extends [Success<infer A>] ? A
     : [T] extends [LocalVar<infer A>] ? A
@@ -54,10 +60,12 @@ export function makeRuntime<R>(
   initialContext: Context.Context<R>,
   initialLocalVars: LocalVars.LocalVars,
   initialScope: Scope.Scope,
+  initialInterruptStatus: boolean,
 ) {
   function runFork<E, A>(effect: Effect<R, E, A>): Fiber<E, A> {
     const fiber = new FiberRuntime(
       new Stack.Stack(initialContext, null),
+      new Stack.Stack(initialInterruptStatus, null),
       initialLocalVars.fork(),
       initialScope.extend(),
       effect,
@@ -93,8 +101,14 @@ class FiberRuntime<E, A> implements Fiber<E, A> {
 
   readonly exit: Promise<Exit<E, A>>;
 
+  // Add the following fields to track interrupt requests
+  private _interruptRequested: boolean = false;
+  private _interruptPromise: Promise<void> | null = null;
+  private _interruptResolve: (() => void) | null = null;
+
   constructor(
     private stack: Stack.Stack<Context.Context<any>>,
+    private interruptStatus: Stack.Stack<boolean>,
     private localVars: LocalVars.LocalVars,
     private scope: Scope.Scope,
     effect: Effect<any, E, A>,
@@ -113,16 +127,35 @@ class FiberRuntime<E, A> implements Fiber<E, A> {
   }.bind(this);
 
   [Symbol.asyncDispose] = async function (this: FiberRuntime<E, A>) {
-    if (this._iterator.return) {
-      await this._iterator.return();
-    }
+    console.log(`Disposing`, this._exited, this.isInterruptible());
 
     if (!this._exited) {
-      await this.onExitFailure(new Failure<never>(new Cause.Interrupted()));
+      if (this.isInterruptible()) {
+        this._result = { done: false, value: new Cause.Interrupted() };
+      } else {
+        // Wait until the interrupt status changes back to true
+        this._interruptRequested = true;
+        if (!this._interruptPromise) {
+          this._interruptPromise = new Promise<void>((resolve) => {
+            this._interruptResolve = resolve;
+          });
+        }
+        await this._interruptPromise;
+      }
       await this.exit.catch(() => null);
-    }
 
-    await this.scope[Symbol.asyncDispose]();
+      if (this._iterator.return) {
+        await this._iterator.return();
+      }
+
+      await this.scope[Symbol.asyncDispose]();
+    } else {
+      if (this._iterator.return) {
+        await this._iterator.return();
+      }
+
+      await this.scope[Symbol.asyncDispose]();
+    }
   }.bind(this);
 
   pipe() {
@@ -130,14 +163,10 @@ class FiberRuntime<E, A> implements Fiber<E, A> {
   }
 
   async start() {
-    try {
-      this._result = await this._iterator.next().catch((error) => {
-        return { value: new Cause.Unexpected(error), done: false };
-      });
-      await this.eventLoop();
-    } finally {
-      await this[Symbol.asyncDispose]();
-    }
+    this._result = await this._iterator.next().catch((error) => {
+      return { value: new Cause.Unexpected(error), done: false };
+    });
+    await this.eventLoop();
   }
 
   private async eventLoop() {
@@ -151,6 +180,7 @@ class FiberRuntime<E, A> implements Fiber<E, A> {
   }
 
   private step(instruction: Effect.Instruction<any, E, any>) {
+    console.log(instruction);
     switch (instruction._id) {
       case "Some":
       case "Right":
@@ -164,6 +194,12 @@ class FiberRuntime<E, A> implements Fiber<E, A> {
         return this.stepProvideContext(instruction);
       case "PopContext":
         return this.stepPopContext(instruction);
+      case "GetInterruptStatus":
+        return this.stepGetInterruptStatus(instruction);
+      case "PushInterruptStatus":
+        return this.stepPushInterruptStatus(instruction);
+      case "PopInterruptStatus":
+        return this.stepPopInterruptStatus(instruction);
       case "Tag":
         return this.stepTag(instruction);
       case "GetScope":
@@ -218,6 +254,39 @@ class FiberRuntime<E, A> implements Fiber<E, A> {
     this._result = await this._iterator.next();
   }
 
+  private async stepGetInterruptStatus(_: Scope.GetInterruptStatus) {
+    this._result = await this._iterator.next(this.interruptStatus.value);
+  }
+
+  private async stepPushInterruptStatus(_: Scope.PushInterruptStatus) {
+    this.interruptStatus = Stack.push(this.interruptStatus, _.interruptStatus);
+    this._result = await this._iterator.next();
+
+    // Check if interrupt was requested and now interruptible
+    if (this.isInterruptible() && this._interruptRequested) {
+      this._interruptRequested = false;
+      if (this._interruptResolve) {
+        this._interruptResolve();
+      }
+      await this.onExitFailure(new Failure<never>(new Cause.Interrupted()));
+    }
+  }
+
+  private async stepPopInterruptStatus(_: Scope.PopInterruptStatus) {
+    this.interruptStatus = Stack.pop(this.interruptStatus) ??
+      this.interruptStatus;
+    this._result = await this._iterator.next();
+
+    // Check if interrupt was requested and now interruptible
+    if (this.isInterruptible() && this._interruptRequested) {
+      this._interruptRequested = false;
+      if (this._interruptResolve) {
+        this._interruptResolve();
+      }
+      await this.onExitFailure(new Failure<never>(new Cause.Interrupted()));
+    }
+  }
+
   private async stepTag(_: Tag<any, any>) {
     const service = this.stack.value.pipe(Context.get(_));
     if (Option.isNone(service)) {
@@ -253,7 +322,7 @@ class FiberRuntime<E, A> implements Fiber<E, A> {
 
   private async onExitSuccess(exit: Success<A>) {
     try {
-      await this.scope[Symbol.asyncDispose]();
+      await this.onExitCleanup();
       this._exit.resolve(exit);
     } catch (error) {
       this._exit.resolve(new Failure<never>(new Cause.Unexpected(error)));
@@ -262,7 +331,7 @@ class FiberRuntime<E, A> implements Fiber<E, A> {
 
   private async onExitFailure(exit: Failure<E>) {
     try {
-      await this.scope[Symbol.asyncDispose]();
+      await this.onExitCleanup();
       this._exit.resolve(exit);
     } catch (error) {
       this._exit.resolve(
@@ -271,6 +340,18 @@ class FiberRuntime<E, A> implements Fiber<E, A> {
         ),
       );
     }
+  }
+
+  private async onExitCleanup() {
+    if (this._interruptRequested && this._interruptResolve) {
+      this._interruptResolve();
+    } else {
+      await this.scope[Symbol.asyncDispose]();
+    }
+  }
+
+  private isInterruptible() {
+    return this.interruptStatus.value;
   }
 }
 
@@ -303,7 +384,7 @@ export const {
   runExit,
   run,
   [Symbol.asyncDispose]: interruptRootFibers,
-} = makeRuntime(Context.empty, LocalVars.make(), rootScope);
+} = makeRuntime(Context.empty, LocalVars.make(), rootScope, true);
 
 export const map = <A, B>(
   f: (a: A) => B,
@@ -332,7 +413,8 @@ export const fork = <R, E, A>(
     const context = yield* new Context.GetContext<R>();
     const localVars = yield* new LocalVars.GetLocalVars();
     const scope = yield* new Scope.GetScope();
-    const runtime = makeRuntime(context, localVars, scope);
+    const interruptStatus = yield* new Scope.GetInterruptStatus();
+    const runtime = makeRuntime(context, localVars, scope, interruptStatus);
     const fiber = runtime.runFork(effect);
 
     return fiber;
@@ -345,7 +427,8 @@ export const forkIn = (scope: Scope.Scope) =>
   gen(async function* () {
     const context = yield* new Context.GetContext<R>();
     const localVars = yield* new LocalVars.GetLocalVars();
-    const runtime = makeRuntime(context, localVars, scope);
+    const interruptStatus = yield* new Scope.GetInterruptStatus();
+    const runtime = makeRuntime(context, localVars, scope, interruptStatus);
     const fiber = runtime.runFork(effect);
 
     return fiber;
@@ -487,3 +570,23 @@ export const scoped = <R, E, A>(
       await dispose(scope);
     }
   });
+
+export const setInterruptStatus =
+  (status: boolean) => <R, E, A>(effect: Effect<R, E, A>) =>
+    gen(async function* () {
+      yield* new Scope.PushInterruptStatus(status);
+
+      try {
+        return yield* effect;
+      } finally {
+        yield* new Scope.PopInterruptStatus();
+      }
+    });
+
+export const uninterruptable: <R, E, A>(
+  effect: Effect<R, E, A>,
+) => Effect<R, E, A> = setInterruptStatus(false);
+
+export const interruptible: <R, E, A>(
+  effect: Effect<R, E, A>,
+) => Effect<R, E, A> = setInterruptStatus(true);
