@@ -20,3 +20,18 @@ export class Success<const Output>
     super();
   }
 }
+
+const void_ = new Success<void>(undefined);
+const null_ = new Success<null>(null);
+
+export { null_ as null, void_ as void };
+
+export function appendCause<E2>(cause: Cause.Cause<E2>) {
+  return <E, A>(exit: Exit<E, A>): Exit<E | E2, A> => {
+    if (exit._id === "Success") return new Failure(cause);
+    
+    return new Failure(
+      new Cause.Sequential<E | E2>([exit.cause, cause]),
+    );
+  };
+}

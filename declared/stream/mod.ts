@@ -1,4 +1,4 @@
-export * from "./sink.ts";
+export * as Sink from "./sink.ts";
+export * as Scheduler from "./scheduler.ts";
+export * as Task from "./task.ts";
 export * from "./stream.ts";
-export * from "./scheduler.ts";
-export * from "./task.ts";

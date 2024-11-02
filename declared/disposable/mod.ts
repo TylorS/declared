@@ -31,22 +31,30 @@ export const dispose = async (
 export interface Settable extends AsyncDisposable {
   isDisposed(): boolean;
   add(disposable: Disposable | AsyncDisposable): Disposable;
+  extend(): Settable;
 }
 
 export function settable(): Settable {
   let isDisposed: boolean = false;
   const disposables: Array<Disposable | AsyncDisposable> = [];
 
+  function add(d: Disposable | AsyncDisposable) {
+    disposables.push(d);
+    return sync(() => {
+      const i = disposables.indexOf(d);
+      if (i > -1) {
+        disposables.splice(i, 1);
+      }
+    });
+  }
+
   return {
     isDisposed: () => isDisposed,
-    add(d) {
-      disposables.push(d);
-      return sync(() => {
-        const i = disposables.indexOf(d);
-        if (i > -1) {
-          disposables.splice(i, 1);
-        }
-      });
+    add,
+    extend() {
+      const inner = settable();
+      inner.add(add(inner));
+      return inner;
     },
     async [Symbol.asyncDispose]() {
       if (isDisposed) return;
@@ -61,3 +69,5 @@ export function settable(): Settable {
     },
   };
 }
+
+export const none = sync(() => {});
