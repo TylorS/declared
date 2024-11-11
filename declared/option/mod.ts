@@ -19,3 +19,9 @@ export const isSome = <Value>(option: Option<Value>): option is Some<Value> =>
 
 export const isNone = <Value>(option: Option<Value>): option is None =>
   option._id === None._id;
+
+export const match = <A, B>(
+  onNone: () => B,
+  onSome: (value: A) => B,
+) => (option: Option<A>): B =>
+  isNone(option) ? onNone() : onSome(option.value);

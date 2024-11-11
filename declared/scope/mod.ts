@@ -70,18 +70,3 @@ const isSyncDisposable = (
 ): disposable is Disposable => Reflect.has(disposable, Symbol.dispose);
 
 export class GetScope extends AsyncIterable.Yieldable("GetScope")<Scope> {}
-
-export class PushInterruptStatus
-  extends AsyncIterable.Yieldable("PushInterruptStatus")<void> {
-  constructor(
-    readonly interruptStatus: boolean,
-  ) {
-    super();
-  }
-}
-
-export class PopInterruptStatus
-  extends AsyncIterable.Yieldable("PopInterruptStatus")<void> {}
-
-export class GetInterruptStatus
-  extends AsyncIterable.Yieldable(`GetInterruptStatus`)<boolean> {}

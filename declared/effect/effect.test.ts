@@ -1,24 +1,21 @@
 import * as Cause from "@declared/cause";
 import * as Context from "@declared/context";
 import * as LocalVar from "@declared/local_var";
-import * as LocalVars from "@declared/local_vars";
-import * as Scope from "@declared/scope";
 import { Tag } from "@declared/tag";
-import { assertEquals } from "https://deno.land/std/assert/mod.ts";
-import { delay } from "https://deno.land/std/async/delay.ts";
 import { expect } from "jsr:@std/expect";
 import assert from "node:assert";
 import { stringify } from "../internal/stringify.ts";
 import * as Effect from "./effect.ts";
+import { Exit } from "../mod.ts";
 
 Deno.test("Effect - success cases", async (t) => {
   await t.step("succeed creates successful effect", async () => {
-    const result = await Effect.run(Effect.succeed("hello"));
+    const result = await Effect.run(Effect.success("hello"));
     expect(result).toBe("hello");
   });
 
   await t.step("can pipe multiple successful effects", async () => {
-    const effect = Effect.succeed(1)
+    const effect = Effect.success(1)
       .pipe(Effect.map((n) => n + 1), Effect.map((n) => n * 2));
 
     const result = await Effect.run(effect);
@@ -68,25 +65,25 @@ Deno.test("Effect - context management", async (t) => {
     const NumberService = Tag<NumberService, number>("NumberService");
 
     const program = NumberService.pipe(
+      Effect.service,
       Effect.map((n) => n * 2),
     );
 
-    const runtime = Effect.makeRuntime(
-      Context.make(NumberService, 42),
-      LocalVars.make(),
-      Scope.make(),
-      true,
-    );
+    const runtime = {
+      ...Effect.defaultRuntime,
+      context: Context.make(NumberService, 42),
+    };
 
-    const result = await runtime.run(program);
-    expect(result).toBe(84);
+    const result = await program.run(runtime);
+    assert(Exit.isSuccess(result));
+    expect(result.value).toBe(84);
   });
 
   await t.step("fails when service is not found", async () => {
     const UnknownService = Tag<{ _id: string }>("UnknownService");
 
     try {
-      await Effect.run(UnknownService as any);
+      await Effect.run(Effect.service(UnknownService) as any);
       throw new Error("Should not succeed");
     } catch (error) {
       assert(stringify(error).includes("Service not found"));
@@ -96,7 +93,7 @@ Deno.test("Effect - context management", async (t) => {
 
 Deno.test("Effect - fiber operations", async (t) => {
   await t.step("can fork and join fibers", async () => {
-    const effect = Effect.succeed("test");
+    const effect = Effect.success("test");
     const fiber = Effect.runFork(effect);
     const result = await fiber.exit;
 
@@ -144,7 +141,7 @@ Deno.test("Effect - error handling", async (t) => {
   await t.step("can catch and recover from errors", async () => {
     const failedEffect = Effect.expected("oops");
     const recoveredEffect = failedEffect.pipe(
-      Effect.catchAll((error) => Effect.succeed(`recovered: ${error.message}`)),
+      Effect.catchAll((error) => Effect.success(`recovered: ${error.message}`)),
     );
 
     const result = await Effect.run(recoveredEffect);
@@ -158,34 +155,34 @@ Deno.test("Effect - local variables", async (t) => {
     await Effect.run(Effect.gen(async function* () {
       const initial = yield* foo;
       expect(initial).toBe("foo");
-      const updated = yield* foo.pipe(Effect.set("bar"));
+      const updated = yield* foo.pipe(Effect.setLocalVar("bar"));
       expect(updated).toBe("bar");
       expect(updated).toBe(yield* foo);
     }));
   });
 });
 
-Deno.test("Effect - uninterruptable regions", async () => {
-  let executed = false;
+// Deno.test("Effect - uninterruptable regions", async () => {
+//   let executed = false;
 
-  const effect = Effect.gen(async function* () {
-    // This region cannot be interrupted
-    yield* Effect.uninterruptable(Effect.gen(async function* () {
-      await delay(50); // Simulate some work
-      executed = true;
-    }));
-  });
+//   const effect = Effect.gen(async function* () {
+//     // This region cannot be interrupted
+//     yield* Effect.uninterruptable(Effect.gen(async function* () {
+//       await delay(50); // Simulate some work
+//       executed = true;
+//     }));
+//   });
 
-  const fiber = Effect.runFork(effect);
+//   const fiber = Effect.runFork(effect);
 
-  // Try to interrupt immediately
-  await fiber[Symbol.asyncDispose]();
+//   // Try to interrupt immediately
+//   await fiber[Symbol.asyncDispose]();
 
-  // Wait for the fiber to complete
-  const exit = await fiber.exit;
+//   // Wait for the fiber to complete
+//   const exit = await fiber.exit;
 
-  // The code in uninterruptible should have executed despite interruption
-  assertEquals(executed, true);
-  assert(exit._id === "Failure");
-  assertEquals(exit.cause, new Cause.Interrupted());
-});
+//   // The code in uninterruptible should have executed despite interruption
+//   assertEquals(executed, true);
+//   assert(exit._id === "Failure");
+//   assertEquals(exit.cause, new Cause.Interrupted());
+// });

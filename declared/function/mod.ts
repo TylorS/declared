@@ -657,3 +657,17 @@ export function flow(
 export const identity = <const T>(t: T): T => t;
 
 export const second = <const T, const U>(_t: T, u: U): U => u;
+
+export const constant =
+  <const T>(t: T): (..._: readonly unknown[]) => T => () => t;
+
+export const constFalse = constant(false);
+export const constTrue = constant(true);
+export const constZero = constant(0);
+export const constOne = constant(1);
+export const constNull = constant(null);
+export const constUndefined = constant(undefined);
+export const constVoid = constant<void>(undefined);
+export const constEmptyString = constant("");
+export const constEmptyArray = constant([]);
+export const constEmptyRecord = constant({});

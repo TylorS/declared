@@ -75,12 +75,3 @@ export const merge =
 
 export class GetContext<R>
   extends AsyncIterable.Yieldable(`GetContext`)<Context<R>> {}
-
-export class ProvideContext<R>
-  extends AsyncIterable.Yieldable(`ProvideContext`)<void> {
-  constructor(readonly context: Context<R>) {
-    super();
-  }
-}
-
-export class PopContext extends AsyncIterable.Yieldable(`PopContext`)<void> {}

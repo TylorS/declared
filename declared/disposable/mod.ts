@@ -39,6 +39,8 @@ export function settable(): Settable {
   const disposables: Array<Disposable | AsyncDisposable> = [];
 
   function add(d: Disposable | AsyncDisposable) {
+    if (d === none) return d;
+
     disposables.push(d);
     return sync(() => {
       const i = disposables.indexOf(d);
