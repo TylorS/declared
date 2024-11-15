@@ -1,61 +1,63 @@
 import * as AsyncIterable from "@declared/async_iterable";
+import { settable, sync } from "@declared/disposable";
+import * as Effect from "@declared/effect";
+import { Exit } from "@declared/exit";
 import { Tag } from "@declared/tag";
 
-export interface Scope extends AsyncDisposable {
+export type Finalizer<R = never> = (
+  exit: Exit<unknown, unknown>,
+) => Effect.Effect<R, never, unknown>;
+
+export interface Scope {
   readonly _id: "Scope";
 
-  add(disposable: Disposable | AsyncDisposable): Disposable;
+  addFinalizer<R>(finalizer: Finalizer<R>): Effect.Effect<R, never, Disposable>;
+  addDisposable(disposable: Disposable | AsyncDisposable): Disposable;
   extend(): Scope;
+  close(exit: Exit<unknown, unknown>): Effect.Effect<never, never, unknown>;
 }
 
 export const Scope = Tag<Scope>("Scope");
 
-const makeDisposable = (dispose: () => void) => ({
-  [Symbol.dispose]: dispose,
-});
-
 class ScopeImpl implements Scope {
   readonly _id = "Scope";
 
-  private disposables: Disposable[] = [];
-  private asyncDisposables: AsyncDisposable[] = [];
+  private finalizers: Set<Finalizer> = new Set();
+  private disposable = settable();
+  private exit: Exit<unknown, unknown> | null = null;
 
-  add(disposable: Disposable | AsyncDisposable): Disposable {
-    if (isSyncDisposable(disposable)) {
-      this.disposables.push(disposable);
-      return makeDisposable(() => this.removeDisposable(disposable));
-    } else {
-      this.asyncDisposables.push(disposable);
-      return makeDisposable(() => this.removeAsyncDisposable(disposable));
-    }
-  }
-
-  private removeDisposable(disposable: Disposable): void {
-    const index = this.disposables.indexOf(disposable);
-    if (index !== -1) {
-      this.disposables.splice(index, 1);
-    }
-  }
-
-  private removeAsyncDisposable(disposable: AsyncDisposable): void {
-    const index = this.asyncDisposables.indexOf(disposable);
-    if (index !== -1) {
-      this.asyncDisposables.splice(index, 1);
-    }
+  addDisposable(disposable: Disposable | AsyncDisposable): Disposable {
+    return this.disposable.add(disposable);
   }
 
   extend(): Scope {
     const child = new ScopeImpl();
-    child.add(this.add(child));
+    const close = (exit: Exit<unknown, unknown>) => child.close(exit);
+    this.finalizers.add(close);
+    child.addDisposable(sync(() => this.finalizers.delete(close)));
     return child;
   }
 
-  async [Symbol.asyncDispose](): Promise<void> {
-    this.disposables.forEach((d) => d[Symbol.dispose]());
+  addFinalizer<R>(
+    finalizer: Finalizer<R>,
+  ): Effect.Effect<R, never, Disposable> {
+    return Effect.gen(this, async function* () {
+      const ctx = yield* Effect.context<R>();
+      const close = (exit: Exit<unknown, unknown>) =>
+        finalizer(exit).pipe(Effect.provideContext(ctx));
+      this.finalizers.add(close);
+      return this.addDisposable(sync(() => this.finalizers.delete(close)));
+    });
+  }
 
-    await Promise.allSettled(
-      this.asyncDisposables.map((d) => d[Symbol.asyncDispose]()),
-    );
+  close(exit: Exit<unknown, unknown>): Effect.Effect<never, never, unknown> {
+    return Effect.gen(this, async function* () {
+      this.exit = exit;
+      for (const finalizer of Array.from(this.finalizers).reverse()) {
+        yield* finalizer(exit);
+      }
+      await this.disposable[Symbol.asyncDispose]();
+    });
   }
 
   static readonly make = (): Scope => new ScopeImpl();
@@ -64,9 +66,5 @@ class ScopeImpl implements Scope {
 export function make(): Scope {
   return new ScopeImpl();
 }
-
-const isSyncDisposable = (
-  disposable: Disposable | AsyncDisposable,
-): disposable is Disposable => Reflect.has(disposable, Symbol.dispose);
 
 export class GetScope extends AsyncIterable.Yieldable("GetScope")<Scope> {}

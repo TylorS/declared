@@ -3,6 +3,7 @@ import * as Cause from "@declared/cause";
 import * as C from "@declared/context";
 import * as Deferred from "@declared/deferred";
 import * as Disposable from "@declared/disposable";
+import { Duration } from "@declared/duration";
 import * as Either from "@declared/either";
 import * as Exit from "@declared/exit";
 import * as LocalVar from "@declared/local_var";
@@ -11,7 +12,6 @@ import * as Option from "@declared/option";
 import * as Scheduler from "@declared/scheduler";
 import * as Scope from "@declared/scope";
 import { Tag } from "@declared/tag";
-import { Duration } from "@declared/duration";
 
 export const EFFECT_ID = "Effect" as const;
 
@@ -30,10 +30,10 @@ export declare namespace Effect {
     readonly scheduler: Scheduler.Scheduler;
   };
 
-  export type Context<T> = [T] extends [never] ? []
-    : [T] extends [Effect<infer R, infer E, infer A>] ? R
-    : [T] extends [Tag<infer R, any>] ? R
-    : [T] extends [C.GetContext<infer R>] ? R
+  export type Context<T> = [T] extends [never] ? never
+    : T extends Effect<infer R, infer E, infer A> ? R
+    : T extends Tag<infer R, any> ? R
+    : T extends C.GetContext<infer R> ? R
     : never;
 
   export type Error<T> = [T] extends [never] ? never
@@ -62,6 +62,7 @@ export declare namespace Effect {
     | LocalVar.LocalVar<A>
     | LocalVars.GetLocalVars
     | Scope.GetScope
+    | Scheduler.GetScheduler
     | Effect<R, E, A>;
 }
 
@@ -260,6 +261,17 @@ export const uninterruptible = <R, E, A>(
   effect: Effect<R, E, A>,
 ): Effect<R, E, A> => new SetInterruptStatus(effect, false);
 
+class GetScheduler extends Effect<never, never, Scheduler.Scheduler> {
+  run(
+    _: Effect.Runtime<never>,
+  ): Promise<Exit.Exit<never, Scheduler.Scheduler>> {
+    return Promise.resolve(Exit.success(_.scheduler));
+  }
+}
+
+export const getScheduler: Effect<never, never, Scheduler.Scheduler> =
+  new GetScheduler();
+
 export const fromInstruction = <Y extends Effect.Instruction<any, any, any>>(
   instruction: Y,
 ): Effect<Effect.Context<Y>, Effect.Error<Y>, Effect.Success<Y>> => {
@@ -279,12 +291,15 @@ export const fromInstruction = <Y extends Effect.Instruction<any, any, any>>(
       return getLocalVars as any;
     case "GetScope":
       return getScope as any;
+    case "GetScheduler":
+      return getScheduler as any;
     case "GetContext":
       return context() as any;
     case "LocalVar":
       return getLocalVar(instruction);
     case "None":
       return failure<never>(new Cause.Empty());
+
     default:
       return failure(instruction);
   }
@@ -332,13 +347,36 @@ class Gen<Y extends Effect.Instruction<any, any, any>, A> extends Effect<
 
 export function gen<Y extends Effect.Instruction<any, any, any>, A>(
   f: () => AsyncGenerator<Y, A>,
+): Effect<Effect.Context<Y>, Effect.Error<Y>, A>;
+export function gen<T, Y extends Effect.Instruction<any, any, any>, A>(
+  self: T,
+  f: (this: T) => AsyncGenerator<Y, A>,
+): Effect<Effect.Context<Y>, Effect.Error<Y>, A>;
+export function gen<T, Y extends Effect.Instruction<any, any, any>, A>(
+  ...args: [T, (this: T) => AsyncGenerator<Y, A>] | [
+    (this: T) => AsyncGenerator<Y, A>,
+  ]
 ): Effect<Effect.Context<Y>, Effect.Error<Y>, A> {
-  return new Gen(f);
+  if (args.length === 1) {
+    return new Gen(args[0]);
+  }
+  return new Gen(() => args[1].call(args[0]));
 }
 
 export interface Fiber<E, A> extends AsyncDisposable {
   readonly exit: Promise<Exit.Exit<E, A>>;
 }
+
+export const suspend = <R, E, A>(f: () => Effect<R, E, A>): Effect<R, E, A> =>
+  gen(async function* () {
+    return yield* f();
+  });
+
+export const sync = <R, E, A>(f: () => A): Effect<R, E, A> =>
+  // deno-lint-ignore require-yield
+  gen(async function* () {
+    return f();
+  });
 
 const makeRunFork =
   <R>(runtime: Effect.Runtime<R>) =>
@@ -347,40 +385,39 @@ const makeRunFork =
     const localVars = runtime.localVars.fork();
     const exit = Deferred.make<E, A>();
     const interruptDeferred = Deferred.make<unknown, unknown>();
-    let isDisposed = false;
 
-    scope.add(runtime.scheduler.asap(
+    scope.addDisposable(runtime.scheduler.asap(
       Scheduler.Task.make(
-        () => {
-          return effect.run({
-            context: runtime.context,
-            localVars,
-            scope,
-            scheduler: runtime.scheduler,
-          }).then((result) => {
-            if (!isDisposed) {
-              exit.resolve(result);
-              interruptDeferred.resolve(result);
-            }
-          }).catch((error) => {
+        async () => {
+          try {
+            const result = await effect.run({
+              context: runtime.context,
+              localVars,
+              scope,
+              scheduler: runtime.scheduler,
+            });
+            exit.resolve(result);
+            interruptDeferred.resolve(result);
+            return await scope.close(result).run(runtime);
+          } catch (error) {
             exit.reject(error);
             interruptDeferred.reject(error);
-          });
+            return await scope.close(Exit.unexpected(error)).run(runtime);
+          }
         },
-        (defect) => {
+        async (defect) => {
           exit.reject(defect);
           interruptDeferred.reject(defect);
+          return await scope.close(Exit.interrupted()).run(runtime);
         },
       ),
     ));
 
     const dispose = async () => {
-      isDisposed = true;
-
+      const interrupt = Exit.interrupted();
       const status = localVars.get(LocalVar.InterruptStatus);
       if (status) {
         // If interruptible, resolve immediately with interrupted
-        const interrupt = Exit.interrupted();
         interruptDeferred.resolve(interrupt);
         exit.resolve(interrupt);
       } else {
@@ -391,9 +428,8 @@ const makeRunFork =
 
       // Wait for interruption to complete
       await interruptDeferred.promise;
-
-      // Clean up scope
-      await Disposable.asyncDispose(scope);
+      // Close up scope
+      await scope.close(interrupt);
     };
 
     return {
@@ -401,21 +437,26 @@ const makeRunFork =
       [Symbol.asyncDispose]: async () => {
         await dispose().catch(async (error) => {
           console.error("Error during fiber disposal:", error);
-          await Disposable.asyncDispose(scope);
+          await scope.close(Exit.interrupted());
         });
       },
     };
   };
 
-export const makeRuntime = <R>(runtime: Effect.Runtime<R>) => ({
-  runFork: makeRunFork(runtime),
-  runExit: <E, A>(effect: Effect<R, E, A>): Promise<Exit.Exit<E, A>> =>
-    effect.run(runtime),
-  run: <E, A>(effect: Effect<R, E, A>): Promise<A> =>
-    effect.run(runtime).then((exit) =>
-      Exit.isFailure(exit) ? Promise.reject(exit.cause) : exit.value
-    ),
-});
+export const makeRuntime = <R>(runtime: Effect.Runtime<R>) => {
+  const runFork = makeRunFork(runtime);
+  return ({
+    runFork,
+    runExit: <E, A>(effect: Effect<R, E, A>): Promise<Exit.Exit<E, A>> =>
+      runFork(effect).exit,
+    run: <E, A>(effect: Effect<R, E, A>): Promise<A> =>
+      runFork(effect).exit.then((exit) =>
+        Exit.isFailure(exit) ? Promise.reject(exit.cause) : exit.value
+      ),
+  });
+};
+
+export type Runtime<R> = ReturnType<typeof makeRuntime<R>>;
 
 export const defaultScheduler = Scheduler.make();
 export const defaultScope = Scope.make();
@@ -504,19 +545,21 @@ export const fork = <R, E, A>(
 ): Effect<R, never, Fiber<E, A>> => new Fork(effect);
 
 class FromPromise<A> extends Effect<never, never, A> {
-  constructor(readonly f: (signal: AbortSignal) => Promise<A>) {
+  constructor(readonly f: (signal: AbortSignal) => PromiseLike<A>) {
     super();
   }
 
   async run(_: Effect.Runtime<never>): Promise<Exit.Exit<never, A>> {
     const controller = new AbortController();
-    using _disposable = _.scope.add(Disposable.sync(() => controller.abort()));
+    using _disposable = _.scope.addDisposable(
+      Disposable.sync(() => controller.abort()),
+    );
     return await this.f(controller.signal).then(Exit.success, Exit.unexpected);
   }
 }
 
 export const fromPromise = <A>(
-  f: (signal: AbortSignal) => Promise<A>,
+  f: (signal: AbortSignal) => PromiseLike<A>,
 ): Effect<never, never, A> => new FromPromise(f);
 
 class Dispose extends Effect<never, never, void> {
@@ -543,9 +586,64 @@ export const sleep = (delay: Duration): Effect<never, never, void> =>
   fromPromise((signal) => {
     return new Promise((resolve, reject) => {
       const id = setTimeout(resolve, delay.millis);
+
+      // Clean up the timer if aborted
       signal.addEventListener("abort", () => {
         clearTimeout(id);
         reject(new Cause.Interrupted());
       }, { once: true });
     });
   });
+
+export const runtime = <R>(): Effect<R, never, Effect.Runtime<R>> =>
+  gen(async function* () {
+    const ctx = yield* context<R>();
+    const scope = yield* new Scope.GetScope();
+    const scheduler = yield* new Scheduler.GetScheduler();
+    const localVars = yield* new LocalVars.GetLocalVars();
+    const runtime: Effect.Runtime<R> = {
+      context: ctx,
+      scope,
+      scheduler,
+      localVars,
+    };
+    return runtime;
+  });
+
+export const addFinalizer = <R>(
+  finalizer: Scope.Finalizer<R>,
+): Effect<R | Scope.Scope, never, unknown> => {
+  return gen(async function* () {
+    const scope = yield* Scope.Scope;
+    return yield* scope.addFinalizer(finalizer);
+  });
+};
+
+export const acquireRelease = <R, E, A, R2>(
+  acquire: Effect<R, E, A>,
+  release: (a: A, exit: Exit.Exit<unknown, unknown>) => Effect<R2, never, unknown>,
+): Effect<R | R2 | Scope.Scope, E, A> => {
+  return gen(async function* () {
+    const a = yield* uninterruptible(acquire);
+    yield* addFinalizer((exit) => release(a, exit));
+    return a;
+  });
+};
+
+class ProvideContext<R, E, A, R2> extends Effect<Exclude<R, R2>, E, A> {
+  constructor(readonly effect: Effect<R, E, A>, readonly ctx: C.Context<R2>) {
+    super();
+  }
+
+  run(runtime: Effect.Runtime<Exclude<R, R2>>): Promise<Exit.Exit<E, A>> {
+    return this.effect.run({
+      ...runtime,
+      context: runtime.context.pipe(C.merge(this.ctx)) as C.Context<R>,
+    });
+  }
+}
+
+export const provideContext =
+  <R2>(ctx: C.Context<R2>) =>
+  <R, E, A>(effect: Effect<R, E, A>): Effect<Exclude<R, R2>, E, A> =>
+    new ProvideContext(effect, ctx);

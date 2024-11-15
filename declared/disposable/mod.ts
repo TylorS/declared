@@ -1,9 +1,9 @@
-export const sync = (f: () => void): Disposable => ({
+export const sync = (f: () => unknown): Disposable => ({
   [Symbol.dispose]: f,
 });
 
-export const async = (f: () => PromiseLike<void>): AsyncDisposable => ({
-  [Symbol.asyncDispose]: f,
+export const async = (f: () => PromiseLike<unknown>): AsyncDisposable => ({
+  [Symbol.asyncDispose]: f as () => PromiseLike<void>,
 });
 
 export const isSync = (d: Disposable | AsyncDisposable): d is Disposable =>

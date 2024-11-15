@@ -1,3 +1,4 @@
+import * as AsyncIterable from "@declared/async_iterable";
 import * as D from "@declared/disposable";
 import type { Duration } from "@declared/duration";
 import * as Task from "./task.ts";
@@ -125,4 +126,11 @@ export function makeVirtualScheduler(
     ...make(timer),
     progressTimeBy: timer.progressTimeBy,
   };
+}
+
+export class GetScheduler
+  extends AsyncIterable.Yieldable("GetScheduler")<Scheduler> {
+  constructor() {
+    super();
+  }
 }
