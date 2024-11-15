@@ -11,10 +11,10 @@ export declare namespace Exit {
     : never;
 }
 
-export class Failure<out const Error>
+export class Failure<const out Error>
   extends AsyncIterable.Failure("Failure")<Cause.Cause<Error>> {}
 
-export class Success<out const Output>
+export class Success<const out Output>
   extends AsyncIterable.Yieldable("Success")<Output> {
   constructor(readonly value: Output) {
     super();
@@ -42,7 +42,13 @@ export const failure = <E>(cause: Cause.Cause<E>): Exit<E, never> =>
   new Failure(cause);
 
 export const unexpected = (unexpected: unknown): Exit<never, never> =>
-  failure<never>(new Cause.Unexpected(unexpected));
+  failure<never>(
+    unexpected instanceof Cause.Interrupted ||
+      unexpected instanceof Cause.Unexpected ||
+      unexpected instanceof Cause.Empty
+      ? unexpected
+      : new Cause.Unexpected(unexpected),
+  );
 
 export const empty = () => failure<never>(new Cause.Empty());
 
@@ -58,3 +64,5 @@ export const isSuccess = <E, A>(exit: Exit<E, A>): exit is Success<A> =>
 export const map =
   <A, B>(f: (a: A) => B) => <E>(exit: Exit<E, A>): Exit<E, B> =>
     isSuccess(exit) ? success(f(exit.value)) : exit;
+
+export const interrupted = () => failure<never>(new Cause.Interrupted());

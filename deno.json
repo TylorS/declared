@@ -9,6 +9,7 @@
     "@declared/cause": "./declared/cause/mod.ts",
     "@declared/context": "./declared/context/mod.ts",
     "@declared/data": "./declared/data/mod.ts",
+    "@declared/deferred": "./declared/deferred/mod.ts",
     "@declared/disposable": "./declared/disposable/mod.ts",
     "@declared/duration": "./declared/duration/mod.ts",
     "@declared/effect": "./declared/effect/mod.ts",
@@ -37,6 +38,7 @@
     "@declared/vite": "./vite/mod.ts",
     "@declared/vitest": "./vitest/mod.ts",
 
+    "deno-assert": "https://deno.land/std/assert/mod.ts",
     "esbuild": "npm:esbuild@latest",
     "vite": "npm:vite@latest",
     "vitest": "npm:vitest@latest",

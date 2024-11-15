@@ -2,6 +2,8 @@ import * as D from "@declared/disposable";
 import type { Duration } from "@declared/duration";
 import * as Task from "./task.ts";
 
+export * as Task from "./task.ts";
+
 export interface Scheduler {
   asap(task: Task.Task): Disposable;
   delay(task: Task.Task, delay: Duration): Disposable;

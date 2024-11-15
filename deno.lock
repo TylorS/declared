@@ -40,7 +40,7 @@
     "@std/expect@1.0.6": {
       "integrity": "dffba969ca5ea6d7c39338d4985c9af2bfa6e080c710cc2b77756dd7657c369c",
       "dependencies": [
-        "jsr:@std/assert",
+        "jsr:@std/assert@^1.0.6",
         "jsr:@std/internal"
       ]
     },

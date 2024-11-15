@@ -19,4 +19,8 @@ export const make = <T>(
 ): LocalVar<T> => new LocalVar(initialize, fork, join);
 
 export const InterruptStatus = make<boolean>(constTrue);
-export const Interruptors = make<Array<Deferred<never, void>>>(() => []);
+export const Interruptors = make<Array<Deferred<unknown, unknown>>>(
+  () => [],
+  () => [],
+  (a, b) => [...a, ...b],
+);

@@ -2,11 +2,12 @@ import * as Cause from "@declared/cause";
 import * as Context from "@declared/context";
 import * as LocalVar from "@declared/local_var";
 import { Tag } from "@declared/tag";
+import { assertEquals } from "deno-assert";
 import { expect } from "jsr:@std/expect";
 import assert from "node:assert";
 import { stringify } from "../internal/stringify.ts";
-import * as Effect from "./effect.ts";
 import { Exit } from "../mod.ts";
+import * as Effect from "./effect.ts";
 
 Deno.test("Effect - success cases", async (t) => {
   await t.step("succeed creates successful effect", async () => {
@@ -107,18 +108,10 @@ Deno.test("Effect - fiber operations", async (t) => {
     let run = false;
     const effect = Effect.gen(async function* test() {
       const fiber = yield* Effect.fork(
-        Effect.fromPromise((signal) =>
-          new Promise<void>((resolve) => {
-            const id = setTimeout(() => {
-              run = true;
-              resolve();
-            }, 1000);
-            signal.addEventListener("abort", () => {
-              clearTimeout(id);
-            }, {
-              once: true,
-            });
-          })
+        Effect.sleep({ millis: 1000 }).pipe(
+          Effect.map(() => {
+            run = true;
+          }),
         ),
       );
 
@@ -162,27 +155,29 @@ Deno.test("Effect - local variables", async (t) => {
   });
 });
 
-// Deno.test("Effect - uninterruptable regions", async () => {
-//   let executed = false;
+Deno.test("Effect - uninterruptible regions", async () => {
+  let executed = false;
 
-//   const effect = Effect.gen(async function* () {
-//     // This region cannot be interrupted
-//     yield* Effect.uninterruptable(Effect.gen(async function* () {
-//       await delay(50); // Simulate some work
-//       executed = true;
-//     }));
-//   });
+  const effect = Effect.gen(async function* () {
+    // This region cannot be interrupted
+    yield* Effect.uninterruptible(Effect.gen(async function* () {
+      // deno-lint-ignore require-await
+      yield* Effect.fromPromise(async () => {
+        executed = true;
+      });
+    }));
+  });
 
-//   const fiber = Effect.runFork(effect);
+  const fiber = Effect.runFork(effect);
 
-//   // Try to interrupt immediately
-//   await fiber[Symbol.asyncDispose]();
+  // Try to interrupt
+  await fiber[Symbol.asyncDispose]();
 
-//   // Wait for the fiber to complete
-//   const exit = await fiber.exit;
+  // Wait for the fiber to complete
+  const exit = await fiber.exit;
 
-//   // The code in uninterruptible should have executed despite interruption
-//   assertEquals(executed, true);
-//   assert(exit._id === "Failure");
-//   assertEquals(exit.cause, new Cause.Interrupted());
-// });
+  // The code in uninterruptible should have executed despite interruption
+  assertEquals(executed, true);
+  assert(exit._id === "Failure");
+  assertEquals(exit.cause, new Cause.Interrupted());
+});

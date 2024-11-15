@@ -1,6 +1,7 @@
 import * as AsyncIterable from "@declared/async_iterable";
 import * as Cause from "@declared/cause";
 import * as C from "@declared/context";
+import * as Deferred from "@declared/deferred";
 import * as Disposable from "@declared/disposable";
 import * as Either from "@declared/either";
 import * as Exit from "@declared/exit";
@@ -10,6 +11,7 @@ import * as Option from "@declared/option";
 import * as Scheduler from "@declared/scheduler";
 import * as Scope from "@declared/scope";
 import { Tag } from "@declared/tag";
+import { Duration } from "@declared/duration";
 
 export const EFFECT_ID = "Effect" as const;
 
@@ -182,35 +184,71 @@ class SetVarLocally<R, E, A, B> extends Effect<R, E, A> {
     super();
   }
 
-  async run(_: Effect.Runtime<R>): Promise<Exit.Exit<E, A>> {
+  run(_: Effect.Runtime<R>): Promise<Exit.Exit<E, A>> {
     _.localVars.push(this.localVar, this.value);
-    try {
-      return await this.effect.run(_);
-    } finally {
-      _.localVars.pop(this.localVar);
-    }
+    return this.effect.run(_).finally(() => _.localVars.pop(this.localVar));
   }
 }
 
 export const setVarLocally =
   <A>(localVar: LocalVar.LocalVar<A>, value: A) =>
   <R, E, B>(effect: Effect<R, E, B>): Effect<R, E, B> =>
-      new SetVarLocally(effect, localVar, value);
+    new SetVarLocally(effect, localVar, value);
 
 class SetInterruptStatus<R, E, A> extends Effect<R, E, A> {
   constructor(readonly effect: Effect<R, E, A>, readonly value: boolean) {
     super();
   }
 
-  async run(runtime: Effect.Runtime<R>): Promise<Exit.Exit<E, A>> {
-    try {
-      runtime.localVars.push(LocalVar.InterruptStatus, this.value);
-      const exit = await this.effect.run(runtime);
+  run(runtime: Effect.Runtime<R>): Promise<Exit.Exit<E, A>> {
+    runtime.localVars.push(LocalVar.InterruptStatus, this.value);
 
-      return exit
-    } finally {
-      runtime.localVars.pop(LocalVar.InterruptStatus);
-    }
+    return this.effect.run(runtime)
+      .then((result) => {
+        // Check interruption status before returning
+        const interruptors = runtime.localVars.get(LocalVar.Interruptors);
+        const status = runtime.localVars.get(LocalVar.InterruptStatus);
+
+        if (interruptors.length > 0 && status) {
+          // Clear the interruptors
+          runtime.localVars.set(LocalVar.Interruptors, []);
+
+          const interrupted = Exit.interrupted();
+
+          // Resolve all interruptors
+          for (const deferred of interruptors) {
+            deferred.resolve(interrupted);
+          }
+
+          // Return interrupted exit regardless of success/failure
+          return interrupted;
+        }
+
+        return result;
+      })
+      .catch((error) => {
+        // If we get an unexpected error, check interruption status
+        const interruptors = runtime.localVars.get(LocalVar.Interruptors);
+        const status = runtime.localVars.get(LocalVar.InterruptStatus);
+
+        if (interruptors.length > 0 && status) {
+          // Clear the interruptors
+          runtime.localVars.set(LocalVar.Interruptors, []);
+
+          const interrupted = Exit.interrupted();
+
+          // Resolve all interruptors
+          for (const deferred of interruptors) {
+            deferred.resolve(interrupted);
+          }
+        }
+
+        // If not interrupted, propagate the original error
+        return Exit.unexpected(error);
+      })
+      .finally(() => {
+        runtime.localVars.pop(LocalVar.InterruptStatus);
+      });
   }
 }
 
@@ -284,7 +322,7 @@ class Gen<Y extends Effect.Instruction<any, any, any>, A> extends Effect<
           gen.throw(defect)
             .then(
               (result) => runWithResult(result),
-              (defect) => Promise.resolve(Exit.unexpected(defect)),
+              (defect) => Exit.unexpected(defect),
             ),
       ).then(
         (exit) => gen.return(exit as any).then(() => exit),
@@ -306,15 +344,66 @@ const makeRunFork =
   <R>(runtime: Effect.Runtime<R>) =>
   <E, A>(effect: Effect<R, E, A>): Fiber<E, A> => {
     const scope = runtime.scope.extend();
-    const exit = effect.run({
-      context: runtime.context,
-      localVars: runtime.localVars.fork(),
-      scope,
-      scheduler: runtime.scheduler,
-    });
+    const localVars = runtime.localVars.fork();
+    const exit = Deferred.make<E, A>();
+    const interruptDeferred = Deferred.make<unknown, unknown>();
+    let isDisposed = false;
+
+    scope.add(runtime.scheduler.asap(
+      Scheduler.Task.make(
+        () => {
+          return effect.run({
+            context: runtime.context,
+            localVars,
+            scope,
+            scheduler: runtime.scheduler,
+          }).then((result) => {
+            if (!isDisposed) {
+              exit.resolve(result);
+              interruptDeferred.resolve(result);
+            }
+          }).catch((error) => {
+            exit.reject(error);
+            interruptDeferred.reject(error);
+          });
+        },
+        (defect) => {
+          exit.reject(defect);
+          interruptDeferred.reject(defect);
+        },
+      ),
+    ));
+
+    const dispose = async () => {
+      isDisposed = true;
+
+      const status = localVars.get(LocalVar.InterruptStatus);
+      if (status) {
+        // If interruptible, resolve immediately with interrupted
+        const interrupt = Exit.interrupted();
+        interruptDeferred.resolve(interrupt);
+        exit.resolve(interrupt);
+      } else {
+        // If uninterruptible, add to interruptors queue
+        const interruptors = localVars.get(LocalVar.Interruptors);
+        interruptors.push(interruptDeferred);
+      }
+
+      // Wait for interruption to complete
+      await interruptDeferred.promise;
+
+      // Clean up scope
+      await Disposable.asyncDispose(scope);
+    };
+
     return {
-      exit,
-      [Symbol.asyncDispose]: () => scope[Symbol.asyncDispose](),
+      exit: exit.promise,
+      [Symbol.asyncDispose]: async () => {
+        await dispose().catch(async (error) => {
+          console.error("Error during fiber disposal:", error);
+          await Disposable.asyncDispose(scope);
+        });
+      },
     };
   };
 
@@ -324,9 +413,7 @@ export const makeRuntime = <R>(runtime: Effect.Runtime<R>) => ({
     effect.run(runtime),
   run: <E, A>(effect: Effect<R, E, A>): Promise<A> =>
     effect.run(runtime).then((exit) =>
-      Exit.isFailure(exit)
-        ? Promise.reject(exit.cause)
-        : Promise.resolve(exit.value)
+      Exit.isFailure(exit) ? Promise.reject(exit.cause) : exit.value
     ),
 });
 
@@ -444,10 +531,21 @@ class Dispose extends Effect<never, never, void> {
       await Disposable.asyncDispose(this.disposable);
     }
 
-    return Promise.resolve(Exit.void);
+    return Exit.void;
   }
 }
 
 export const dispose = (
   disposable: Disposable | AsyncDisposable,
 ): Effect<never, never, void> => new Dispose(disposable);
+
+export const sleep = (delay: Duration): Effect<never, never, void> =>
+  fromPromise((signal) => {
+    return new Promise((resolve, reject) => {
+      const id = setTimeout(resolve, delay.millis);
+      signal.addEventListener("abort", () => {
+        clearTimeout(id);
+        reject(new Cause.Interrupted());
+      }, { once: true });
+    });
+  });
