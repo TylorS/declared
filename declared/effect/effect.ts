@@ -417,7 +417,6 @@ const makeRunFork =
       if (status) {
         // If interruptible, resolve immediately with interrupted
         interruptDeferred.resolve(interrupt);
-        exit.resolve(interrupt);
       } else {
         // If uninterruptible, add to interruptors queue
         const interruptors = localVars.get(LocalVar.Interruptors);
@@ -425,9 +424,10 @@ const makeRunFork =
       }
 
       // Wait for interruption to complete
-      await interruptDeferred.promise;
+      const e = await interruptDeferred.promise;
       // Close up scope
-      await scope.close(interrupt);
+      await scope.close(e);
+      exit.resolve(interrupt);
     };
 
     return {
