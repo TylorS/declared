@@ -396,14 +396,14 @@ const makeRunFork =
             scheduler: runtime.scheduler,
           }).then(
             (result) =>
-              scope.close(result).run(runtime).then(() => {
+              scope.close(result).run(runtime).finally(() => {
                 exit.resolve(result);
                 interruptDeferred.resolve(result);
               }),
           ),
         (defect) => {
           const e = Exit.unexpected(defect);
-          return scope.close(e).run(runtime).then(() => {
+          return scope.close(e).run(runtime).finally(() => {
             exit.resolve(e);
             interruptDeferred.resolve(e);
           });
