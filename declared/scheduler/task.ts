@@ -1,25 +1,25 @@
 export interface Task {
-  run(): void;
-  error(error: unknown): void;
+  run(): void | PromiseLike<unknown>;
+  error(error: unknown): void | PromiseLike<unknown>;
 }
 
 
 export const make = (
-  run: () => void,
-  error: (error: unknown) => void,
+  run: () => void | PromiseLike<unknown>,
+  error: (error: unknown) => void | PromiseLike<unknown>,
 ): Task => ({
   run,
   error,
 });
 
-export function andThen(task: Task, f: () => void): Task {
+export function andThen(task: Task, f: () => unknown): Task {
   return {
-    run() {
-      task.run();
+    async run() {
+      await task.run();
       f();
     },
     error(u: unknown) {
-      task.error(u);
+      return task.error(u);
     },
   };
 }

@@ -22,11 +22,11 @@ export const DefaultTimer: Timer = {
   },
 };
 
-function tryRunTask(task: Task.Task) {
+async function tryRunTask(task: Task.Task) {
   try {
-    task.run();
+    await task.run();
   } catch (e) {
-    task.error(e);
+    await task.error(e);
   }
 }
 

@@ -395,17 +395,11 @@ const makeRunFork =
             scope,
             scheduler: runtime.scheduler,
           }).then(
-            (result) => {
-              exit.resolve(result);
-              interruptDeferred.resolve(result);
-              return scope.close(result).run(runtime);
-            },
-            (error) => {
-              const e = Exit.unexpected(error);
-              exit.resolve(e);
-              interruptDeferred.resolve(e);
-              return scope.close(e).run(runtime);
-            },
+            (result) =>
+              scope.close(result).run(runtime).then(() => {
+                exit.resolve(result);
+                interruptDeferred.resolve(result);
+              }),
           ),
         (defect) => {
           const e = Exit.unexpected(defect);
