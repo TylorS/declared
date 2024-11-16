@@ -403,9 +403,10 @@ const makeRunFork =
           ),
         (defect) => {
           const e = Exit.unexpected(defect);
-          exit.resolve(e);
-          interruptDeferred.resolve(e);
-          return scope.close(e).run(runtime);
+          return scope.close(e).run(runtime).then(() => {
+            exit.resolve(e);
+            interruptDeferred.resolve(e);
+          });
         },
       ),
     ));
