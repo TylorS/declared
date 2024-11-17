@@ -12,6 +12,7 @@ import * as Option from "@declared/option";
 import * as Scheduler from "@declared/scheduler";
 import * as Scope from "@declared/scope";
 import { Tag } from "@declared/tag";
+import { flow } from "@declared/function";
 
 export const EFFECT_ID = "Effect" as const;
 
@@ -492,7 +493,50 @@ export const map = <A, B>(f: (a: A) => B) =>
   effect: Effect<R, E, A>,
 ): Effect<R, E, B> => MapEffect.make(effect, f);
 
-export const none = fromInstruction(Option.none());
+class FilterMapEffect<R, E, A, B> extends Effect<R, E, B> {
+  constructor(
+    readonly effect: Effect<R, E, A>,
+    readonly f: (a: A) => Option.Option<B>,
+  ) {
+    super();
+  }
+
+  run(runtime: Effect.Runtime<R>): Promise<Exit.Exit<E, B>> {
+    return this.effect.run(runtime).then((exit) =>
+      Exit.isSuccess(exit)
+        ? this.f(exit.value).pipe(
+          Option.match(
+            Exit.empty,
+            Exit.success,
+          ),
+        )
+        : exit
+    );
+  }
+
+  static make = <R, E, A, B>(
+    effect: Effect<R, E, A>,
+    f: (a: A) => Option.Option<B>,
+  ) => {
+    if (effect instanceof FilterMapEffect) {
+      return new FilterMapEffect(
+        effect.effect,
+        (a) => effect.f(a).pipe(Option.flatMap(f)),
+      );
+    } else if (effect instanceof MapEffect) {
+      return new FilterMapEffect(effect.effect, flow(effect.f, f));
+    }
+
+    return new FilterMapEffect(effect, f);
+  };
+}
+
+export const filterMap = <A, B>(f: (a: A) => Option.Option<B>) =>
+<R, E>(
+  effect: Effect<R, E, A>,
+): Effect<R, E, B> => FilterMapEffect.make(effect, f);
+
+export const none = () => fromInstruction(Option.none());
 
 export const expected = <E>(error: E): Effect<never, E, never> =>
   failure(new Cause.Expected(error));
@@ -522,8 +566,15 @@ class CatchAll<R, E, A, R2, E2, B> extends Effect<R | R2, E2, A | B> {
 export const catchAll = <E, R2, E2, B>(
   f: (cause: Cause.Cause<E>) => Effect<R2, E2, B>,
 ) =>
-<R, A>(effect: Effect<R, E, A>): Effect<R | R2, E | E2, A | B> =>
+<R, A>(effect: Effect<R, E, A>): Effect<R | R2, E2, A | B> =>
   new CatchAll(effect, f);
+
+export const catchError = <E, R2, E2, B>(
+  f: (cause: E) => Effect<R2, E2, B>,
+) =>
+<R, A>(effect: Effect<R, E, A>): Effect<R | R2, E2, A | B> =>
+    effect.pipe(catchAll(Cause.expectedOrNever(f, failure)));
+
 
 class Fork<R, E, A> extends Effect<R, never, Fiber<E, A>> {
   constructor(readonly effect: Effect<R, E, A>) {

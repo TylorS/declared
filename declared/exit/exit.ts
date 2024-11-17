@@ -66,3 +66,9 @@ export const map =
     isSuccess(exit) ? success(f(exit.value)) : exit;
 
 export const interrupted = () => failure<never>(new Cause.Interrupted());
+
+export const flatMap =
+  <E2, A, B>(f: (a: A) => Exit<E2, B>) =>
+  <E>(exit: Exit<E, A>): Exit<E | E2, B> =>
+    isSuccess(exit) ? f(exit.value) : exit;
+

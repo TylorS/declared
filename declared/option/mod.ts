@@ -23,5 +23,9 @@ export const isNone = <Value>(option: Option<Value>): option is None =>
 export const match = <A, B>(
   onNone: () => B,
   onSome: (value: A) => B,
-) => (option: Option<A>): B =>
-  isNone(option) ? onNone() : onSome(option.value);
+) =>
+(option: Option<A>): B => isNone(option) ? onNone() : onSome(option.value);
+
+export const flatMap =
+  <A, B>(f: (a: A) => Option<B>) => (option: Option<A>): Option<B> =>
+    isNone(option) ? option : f(option.value);
