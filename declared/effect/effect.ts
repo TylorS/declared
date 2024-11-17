@@ -364,7 +364,7 @@ export function gen<T, Y extends Effect.Instruction<any, any, any>, A>(
   return new Gen(() => args[1].call(args[0]));
 }
 
-export interface Fiber<E, A> extends AsyncDisposable {
+export interface Fiber<E, A> extends AsyncDisposable, Effect<never, E, A> {
   readonly exit: Promise<Exit.Exit<E, A>>;
 }
 

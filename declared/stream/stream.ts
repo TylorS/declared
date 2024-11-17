@@ -4,7 +4,7 @@ import * as Context from "@declared/context";
 import * as Disposable from "@declared/disposable";
 import type { Duration } from "@declared/duration";
 import * as Exit from "@declared/exit";
-import { makeScheduler, type Scheduler } from "./scheduler.ts";
+import * as Effect from "@declared/effect";
 import * as Sink from "./sink.ts";
 import * as Task from "./task.ts";
 import { type Pipeable, pipeArguments } from "@declared/pipeable";
@@ -12,8 +12,7 @@ import { type Pipeable, pipeArguments } from "@declared/pipeable";
 export interface Stream<out R, out E, out A> extends Pipeable {
   run<AdditionalResources = never>(
     sink: Sink.Sink<E, A>,
-    scheduler: Scheduler,
-    context: Context.Context<R | AdditionalResources>,
+    runtime: Effect.Effect.Runtime<R | AdditionalResources>,
   ): Disposable | AsyncDisposable;
 }
 
@@ -27,16 +26,16 @@ export function make<R, E, A>(run: Stream<R, E, A>["run"]): Stream<R, E, A> {
 }
 
 export function of<const A>(value: A): Stream<never, never, A> {
-  return make((sink, scheduler) =>
-    scheduler.asap(Task.propagateSingleton(sink, value))
+  return make((sink, runtime) =>
+    runtime.scheduler.asap(Task.propagateSingleton(sink, value))
   );
 }
 
 export function fromArray<const A extends ReadonlyArray<any>>(
   array: A,
 ): Stream<never, never, A[number]> {
-  return make((sink, scheduler) =>
-    scheduler.asap(
+  return make((sink, runtime) =>
+    runtime.scheduler.asap(
       Task.andThen(Task.propagateArray(sink, array), () => sink.end()),
     )
   );
@@ -45,16 +44,16 @@ export function fromArray<const A extends ReadonlyArray<any>>(
 export function fromIterable<A>(
   iterable: Iterable<A>,
 ): Stream<never, never, A> {
-  return make((sink, scheduler) =>
-    scheduler.asap(
+  return make((sink, runtime) =>
+    runtime.scheduler.asap(
       Task.andThen(Task.propagateIterable(sink, iterable), () => sink.end()),
     )
   );
 }
 
 export function failCause<E>(cause: Cause.Cause<E>): Stream<never, E, never> {
-  return make((sink, scheduler) =>
-    scheduler.asap(Task.propagateError(sink, cause))
+  return make((sink, runtime) =>
+    runtime.scheduler.asap(Task.propagateError(sink, cause))
   );
 }
 
@@ -62,7 +61,7 @@ export function delay(duration: Duration) {
   return <R, E, A>(
     stream: Stream<R, E, A>,
   ): Stream<R, E, A> => {
-    return make((sink, scheduler, ctx) => {
+    return make((sink, runtime) => {
       const d = Disposable.settable();
       let pendingTasks = 0;
       let ended = false;
@@ -73,7 +72,7 @@ export function delay(duration: Duration) {
           (a) => {
             pendingTasks++;
             // deno-lint-ignore no-var
-            var scheduledTask = d.add(scheduler.delay(
+            var scheduledTask = d.add(runtime.scheduler.delay(
               Task.andThen(
                 Task.propagateEvent(sink, a),
                 () => {
@@ -94,8 +93,7 @@ export function delay(duration: Duration) {
             }
           },
         ),
-        scheduler,
-        ctx,
+        runtime,
       ));
 
       return d;
@@ -104,14 +102,14 @@ export function delay(duration: Duration) {
 }
 
 export function periodic(duration: Duration): Stream<never, never, void> {
-  return make((sink, scheduler) =>
-    scheduler.periodic(Task.propagateEvent(sink, undefined), duration)
+  return make((sink, runtime) =>
+    runtime.scheduler.periodic(Task.propagateEvent(sink, undefined), duration)
   );
 }
 
 export function flatMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
   return <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
-    make<R | R2, E | E2, B>((sink, scheduler, ctx) => {
+    make<R | R2, E | E2, B>((sink, runtime) => {
       const d = Disposable.settable();
 
       let outerEnded = false;
@@ -131,8 +129,7 @@ export function flatMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
                     sink.end();
                   }
                 }),
-                scheduler,
-                ctx,
+                runtime,
               ),
             );
           },
@@ -144,8 +141,7 @@ export function flatMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
             }
           },
         ),
-        scheduler,
-        ctx,
+        runtime,
       ));
 
       return d;
@@ -154,7 +150,7 @@ export function flatMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
 
 export function switchMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
   return <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
-    make<R | R2, E | E2, B>((sink, scheduler, ctx) => {
+    make<R | R2, E | E2, B>((sink, runtime) => {
       const d = Disposable.settable();
       let outerEnded = false;
       let innerDisposable: Disposable.Settable | null = null;
@@ -183,8 +179,7 @@ export function switchMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
                 );
               },
             ),
-            scheduler,
-            ctx,
+            runtime,
           ),
         );
       };
@@ -209,8 +204,7 @@ export function switchMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
             }
           },
         ),
-        scheduler,
-        ctx,
+        runtime,
       ));
 
       return d;
@@ -219,7 +213,7 @@ export function switchMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
 
 export function exhaustMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
   return <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
-    make<R | R2, E | E2, B>((sink, scheduler, ctx) => {
+    make<R | R2, E | E2, B>((sink, runtime) => {
       const d = Disposable.settable();
       let outerEnded = false;
       let innerDisposable: Disposable.Settable | null = null;
@@ -246,8 +240,7 @@ export function exhaustMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
                 );
               },
             ),
-            scheduler,
-            ctx,
+            runtime,
           ),
         );
       };
@@ -269,8 +262,7 @@ export function exhaustMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
             }
           },
         ),
-        scheduler,
-        ctx,
+        runtime,
       ));
 
       return d;
@@ -279,7 +271,7 @@ export function exhaustMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
 
 export function exhaustLatestMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
   return <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
-    make<R | R2, E | E2, B>((sink, scheduler, ctx) => {
+    make<R | R2, E | E2, B>((sink, runtime) => {
       const d = Disposable.settable();
       let outerEnded = false;
       let innerDisposable: Disposable.Settable | null = null;
@@ -312,8 +304,7 @@ export function exhaustLatestMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
                 );
               },
             ),
-            scheduler,
-            ctx,
+            runtime,
           ),
         );
       };
@@ -337,8 +328,7 @@ export function exhaustLatestMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
             }
           },
         ),
-        scheduler,
-        ctx,
+        runtime,
       ));
 
       return d;
@@ -352,8 +342,7 @@ export interface StreamFiber<E> extends AsyncDisposable {
 const constVoid = () => undefined;
 
 export function makeRunFork<R>(
-  scheduler: Scheduler,
-  context: Context.Context<R>,
+  runtime: Effect.Effect.Runtime<R>,
 ) {
   return <E, A>(stream: Stream<R, E, A>): StreamFiber<E> => {
     const { promise, resolve } = Promise.withResolvers<Exit.Exit<E, void>>();
@@ -372,8 +361,7 @@ export function makeRunFork<R>(
         constVoid,
         () => onExit(Exit.void),
       ),
-      scheduler,
-      context,
+      runtime,
     ));
 
     return {
@@ -384,8 +372,7 @@ export function makeRunFork<R>(
 }
 
 export function makeToArray<R>(
-  scheduler: Scheduler,
-  context: Context.Context<R>,
+  runtime: Effect.Effect.Runtime<R>,
 ) {
   return <E, A>(stream: Stream<R, E, A>): Promise<A[]> => {
     const events: A[] = [];
@@ -399,18 +386,15 @@ export function makeToArray<R>(
         (a) => events.push(a),
         () => onExit(Exit.void),
       ),
-      scheduler,
-      context,
+      runtime,
     );
 
     return promise.finally(() => Disposable.dispose(d));
   };
 }
 
-export const DefaultScheduler = makeScheduler();
-
 export const runFork: <E, A>(stream: Stream<never, E, A>) => StreamFiber<E> =
-  makeRunFork(DefaultScheduler, Context.empty);
+  makeRunFork(Effect.defaultRuntime);
 
 export const runExit: <E, A>(
   stream: Stream<never, E, A>,
@@ -424,16 +408,65 @@ export const run: <E, A>(stream: Stream<never, E, A>) => Promise<void> = (
   );
 
 export const toArray: <E, A>(stream: Stream<never, E, A>) => Promise<A[]> =
-  makeToArray(DefaultScheduler, Context.empty);
+  makeToArray(Effect.defaultRuntime);
 
 export const provideContext = <R2>(provided: Context.Context<R2>) =>
 <R, E, A>(
   stream: Stream<R, E, A>,
 ): Stream<Exclude<R, R2>, E, A> =>
-  make((sink, scheduler, ctx) =>
+  make((sink, runtime) =>
     stream.run(
       sink,
-      scheduler,
-      ctx.pipe(Context.merge(provided)) as Context.Context<R>,
+      {
+        ...runtime,
+        context: runtime.context.pipe(
+          Context.merge(provided),
+        ) as Context.Context<R>,
+      },
     )
   );
+
+export const mapEffect =
+  <R, E, A, R2, E2, B>(f: (a: A) => Effect.Effect<R2, E2, B>) =>
+  (stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
+    make((sink, runtime) => {
+      const d = Disposable.settable();
+      const { runFork } = Effect.makeRuntime(runtime);
+
+      let running = 0;
+      let ended = false;
+
+      d.add(
+        stream.run(
+          Sink.make(
+            sink.error,
+            (a) => {
+              running++;
+              const fiber = runFork(f(a));
+              const cleanup = d.add(fiber);
+              fiber.exit.then(
+                Exit.match(
+                  (e) => Cause.isInterrupted(e) ? undefined : sink.error(e),
+                  sink.event,
+                ),
+              ).finally(() => {
+                running--;
+                if (running === 0 && ended) {
+                  sink.end();
+                }
+                Disposable.syncDispose(cleanup);
+              });
+            },
+            () => {
+              ended = true;
+              if (running === 0) {
+                sink.end();
+              }
+            },
+          ),
+          runtime,
+        ),
+      );
+
+      return d;
+    });

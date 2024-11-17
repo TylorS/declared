@@ -58,6 +58,9 @@ export const expected = <E>(expected: E): Exit<E, never> =>
 export const isFailure = <E, A>(exit: Exit<E, A>): exit is Failure<E> =>
   exit._id === Failure._id;
 
+export const isInterrupted = <E, A>(exit: Exit<E, A>): exit is Failure<never> =>
+  exit._id === Failure._id && exit.cause._id === "Interrupted";
+
 export const isSuccess = <E, A>(exit: Exit<E, A>): exit is Success<A> =>
   exit._id === Success._id;
 
@@ -72,3 +75,7 @@ export const flatMap =
   <E>(exit: Exit<E, A>): Exit<E | E2, B> =>
     isSuccess(exit) ? f(exit.value) : exit;
 
+export const match =
+  <E, A, B>(onError: (e: Cause.Cause<E>) => B, onSuccess: (a: A) => B) =>
+  (exit: Exit<E, A>): B =>
+    isSuccess(exit) ? onSuccess(exit.value) : onError(exit.cause);

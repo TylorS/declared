@@ -47,10 +47,10 @@ export const isEmpty = <E>(cause: Cause<E>): cause is Empty =>
 export const isExpected = <E>(cause: Cause<E>): cause is Expected<E> =>
   cause._id === Expected._id;
 
-export const isUnexpected = (cause: Cause<never>): cause is Unexpected =>
+export const isUnexpected = <E>(cause: Cause<E>): cause is Unexpected =>
   cause._id === Unexpected._id;
 
-export const isInterrupted = (cause: Cause<never>): cause is Interrupted =>
+export const isInterrupted = <E>(cause: Cause<E>): cause is Interrupted =>
   cause._id === Interrupted._id;
 
 export const isSequential = <E>(cause: Cause<E>): cause is Sequential<E> =>
