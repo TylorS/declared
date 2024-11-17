@@ -379,67 +379,88 @@ export const sync = <R, E, A>(f: () => A): Effect<R, E, A> =>
     return f();
   });
 
+class FiberImpl<R, E, A> extends Effect<never, E, A> implements Fiber<E, A> {
+  readonly exitDeferred = Deferred.make<E, A>();
+  readonly exit = this.exitDeferred.promise;
+  readonly interruptDeferred = Deferred.make<unknown, unknown>();
+
+  constructor(
+    readonly runtime: Effect.Runtime<R>,
+    readonly effect: Effect<R, E, A>,
+  ) {
+    super();
+  }
+
+  async run<R2>(runtime: Effect.Runtime<R2>): Promise<Exit.Exit<E, A>> {
+    runtime.localVars.join(this.runtime.localVars);
+    const exitDisposable = await runtime.scope.addFinalizer((exit) =>
+      this.runtime.scope.close(exit)
+    ).run(runtime);
+    if (Exit.isFailure(exitDisposable)) {
+      return exitDisposable;
+    }
+    const disposable = exitDisposable.value;
+    return this.exit.finally(() => Disposable.syncDispose(disposable));
+  }
+
+  /**
+   * @internal
+   */
+  start() {
+    this.runtime.scope.addDisposable(this.runtime.scheduler.asap(
+      Scheduler.Task.make(
+        () =>
+          this.effect.run(this.runtime).then(
+            (result) =>
+              this.runtime.scope.close(result).run(this.runtime).finally(() => {
+                this.exitDeferred.resolve(result);
+                this.interruptDeferred.resolve(result);
+              }),
+          ),
+        (defect) => {
+          const e = Exit.unexpected(defect);
+          return this.runtime.scope.close(e).run(this.runtime).finally(() => {
+            this.exitDeferred.resolve(e);
+            this.interruptDeferred.resolve(e);
+          });
+        },
+      ),
+    ));
+  }
+
+  readonly [Symbol.asyncDispose] = () => this.dispose();
+
+  private dispose = async () => {
+    const interrupt = Exit.interrupted();
+    const status = this.runtime.localVars.get(LocalVar.InterruptStatus);
+    if (status) {
+      // If interruptible, resolve immediately with interrupted
+      this.interruptDeferred.resolve(interrupt);
+    } else {
+      // If uninterruptible, add to interruptors queue
+      const interruptors = this.runtime.localVars.get(LocalVar.Interruptors);
+      interruptors.push(this.interruptDeferred);
+    }
+
+    // Wait for interruption to complete
+    const e = await this.interruptDeferred.promise;
+    // Close up scope
+    await this.runtime.scope.close(e);
+    this.exitDeferred.resolve(interrupt);
+  };
+}
+
 const makeRunFork =
   <R>(runtime: Effect.Runtime<R>) =>
   <E, A>(effect: Effect<R, E, A>): Fiber<E, A> => {
     const scope = runtime.scope.extend();
     const localVars = runtime.localVars.fork();
-    const exit = Deferred.make<E, A>();
-    const interruptDeferred = Deferred.make<unknown, unknown>();
+    const fiberRuntime = { ...runtime, localVars, scope };
 
-    scope.addDisposable(runtime.scheduler.asap(
-      Scheduler.Task.make(
-        () =>
-          effect.run({
-            context: runtime.context,
-            localVars,
-            scope,
-            scheduler: runtime.scheduler,
-          }).then(
-            (result) =>
-              scope.close(result).run(runtime).finally(() => {
-                exit.resolve(result);
-                interruptDeferred.resolve(result);
-              }),
-          ),
-        (defect) => {
-          const e = Exit.unexpected(defect);
-          return scope.close(e).run(runtime).finally(() => {
-            exit.resolve(e);
-            interruptDeferred.resolve(e);
-          });
-        },
-      ),
-    ));
+    const fiber = new FiberImpl<R, E, A>(fiberRuntime, effect);
+    fiber.start();
 
-    const dispose = async () => {
-      const interrupt = Exit.interrupted();
-      const status = localVars.get(LocalVar.InterruptStatus);
-      if (status) {
-        // If interruptible, resolve immediately with interrupted
-        interruptDeferred.resolve(interrupt);
-      } else {
-        // If uninterruptible, add to interruptors queue
-        const interruptors = localVars.get(LocalVar.Interruptors);
-        interruptors.push(interruptDeferred);
-      }
-
-      // Wait for interruption to complete
-      const e = await interruptDeferred.promise;
-      // Close up scope
-      await scope.close(e);
-      exit.resolve(interrupt);
-    };
-
-    return {
-      exit: exit.promise,
-      [Symbol.asyncDispose]: async () => {
-        await dispose().catch(async (error) => {
-          console.error("Error during fiber disposal:", error);
-          await scope.close(Exit.interrupted());
-        });
-      },
-    };
+    return fiber;
   };
 
 export const makeRuntime = <R>(runtime: Effect.Runtime<R>) => {
@@ -573,8 +594,7 @@ export const catchError = <E, R2, E2, B>(
   f: (cause: E) => Effect<R2, E2, B>,
 ) =>
 <R, A>(effect: Effect<R, E, A>): Effect<R | R2, E2, A | B> =>
-    effect.pipe(catchAll(Cause.expectedOrNever(f, failure)));
-
+  effect.pipe(catchAll(Cause.expectedOrNever(f, failure)));
 
 class Fork<R, E, A> extends Effect<R, never, Fiber<E, A>> {
   constructor(readonly effect: Effect<R, E, A>) {

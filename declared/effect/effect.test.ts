@@ -26,7 +26,7 @@ Deno.test("Effect - success cases", async (t) => {
 
 Deno.test("Effect - failure cases", async (t) => {
   await t.step("empty failure", async () => {
-    const exit = await Effect.runExit(Effect.none);
+    const exit = await Effect.runExit(Effect.none());
     if (exit._id === "Failure") {
       expect(exit.cause._id).toBe("Empty");
     } else {
