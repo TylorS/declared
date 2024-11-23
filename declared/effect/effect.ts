@@ -450,7 +450,7 @@ class FiberImpl<R, E, A> extends Effect<never, E, A> implements Fiber<E, A> {
   };
 }
 
-const makeRunFork =
+export const makeRunFork =
   <R>(runtime: Effect.Runtime<R>) =>
   <E, A>(effect: Effect<R, E, A>): Fiber<E, A> => {
     const scope = runtime.scope.extend();
@@ -722,3 +722,36 @@ export const scoped = <R, E, A>(
     const child = parent.extend();
     return yield* effect.pipe(provideContext(C.make(Scope.Scope, child)));
   });
+
+class MatchCause<R, E, A, R2, E2, B, R3, E3, C>
+  extends Effect<R | R2 | R3, E2 | E3, B | C> {
+  constructor(
+    readonly effect: Effect<R, E, A>,
+    readonly f: (cause: Cause.Cause<E>) => Effect<R2, E2, B>,
+    readonly g: (value: A) => Effect<R3, E3, C>,
+  ) {
+    super();
+  }
+
+  run<R4>(
+    runtime: Effect.Runtime<R | R2 | R3 | R4>,
+  ): Promise<Exit.Exit<E2 | E3, B | C>> {
+    return this.effect.run(runtime).then((
+      exit,
+    ): Promise<Exit.Exit<E2 | E3, B | C>> =>
+      exit.pipe(
+        Exit.match(
+          (cause) => this.f(cause).run(runtime),
+          (value) => this.g(value).run(runtime),
+        ),
+      )
+    );
+  }
+}
+
+export const matchCause = <E, R2, E2, B, A, R3, E3, C>(
+  f: (cause: Cause.Cause<E>) => Effect<R2, E2, B>,
+  g: (value: A) => Effect<R3, E3, C>,
+) =>
+<R>(effect: Effect<R, E, A>): Effect<R | R2 | R3, E2 | E3, B | C> =>
+  new MatchCause(effect, f, g);

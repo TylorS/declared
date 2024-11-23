@@ -426,47 +426,25 @@ export const provideContext = <R2>(provided: Context.Context<R2>) =>
     )
   );
 
+export const fromEffect = <R, E, A>(
+  effect: Effect.Effect<R, E, A>,
+): Stream<R, E, A> =>
+  make((sink, runtime) => {
+    const fiber = effect.pipe(
+      Effect.matchCause(
+        (cause) => Effect.sync(() => sink.error(cause)),
+        (value) =>
+          Effect.sync(() => {
+            sink.event(value);
+            sink.end();
+          }),
+      ),
+      Effect.makeRunFork(runtime),
+    );
+    return fiber;
+  });
+
 export const mapEffect =
   <R, E, A, R2, E2, B>(f: (a: A) => Effect.Effect<R2, E2, B>) =>
   (stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
-    make((sink, runtime) => {
-      const d = Disposable.settable();
-      const { runFork } = Effect.makeRuntime(runtime);
-
-      let running = 0;
-      let ended = false;
-
-      d.add(
-        stream.run(
-          Sink.make(
-            sink.error,
-            (a) => {
-              running++;
-              const fiber = runFork(f(a));
-              const cleanup = d.add(fiber);
-              fiber.exit.then(
-                Exit.match(
-                  (e) => Cause.isInterrupted(e) ? undefined : sink.error(e),
-                  sink.event,
-                ),
-              ).finally(() => {
-                running--;
-                if (running === 0 && ended) {
-                  sink.end();
-                }
-                Disposable.syncDispose(cleanup);
-              });
-            },
-            () => {
-              ended = true;
-              if (running === 0) {
-                sink.end();
-              }
-            },
-          ),
-          runtime,
-        ),
-      );
-
-      return d;
-    });
+    stream.pipe(flatMap((a) => fromEffect(f(a))));

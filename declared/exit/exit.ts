@@ -76,6 +76,6 @@ export const flatMap =
     isSuccess(exit) ? f(exit.value) : exit;
 
 export const match =
-  <E, A, B>(onError: (e: Cause.Cause<E>) => B, onSuccess: (a: A) => B) =>
-  (exit: Exit<E, A>): B =>
+  <E, A, B, C>(onError: (e: Cause.Cause<E>) => B, onSuccess: (a: A) => C) =>
+  (exit: Exit<E, A>): B | C =>
     isSuccess(exit) ? onSuccess(exit.value) : onError(exit.cause);
