@@ -18,6 +18,10 @@ export declare namespace Context {
   export interface Variance<Resources> {
     readonly _Resources: (_: never) => Resources;
   }
+
+  export type Services<C> = C extends Context<infer Services>
+    ? Services
+    : never;
 }
 
 const variance: Context.Variance<any> = {

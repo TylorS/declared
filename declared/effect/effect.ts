@@ -784,30 +784,70 @@ export const provideContext =
   <R, E, A>(effect: Effect<R, E, A>): Effect<Exclude<R, R2>, E, A> =>
     new ProvideContext(effect, ctx);
 
-export const provideLayer =
-  <R2, E2, B>(layer: Layer<R2, E2, B>) =>
-  <R, E, A>(effect: Effect<R, E, A>): Effect<Exclude<R, B> | R2, E | E2, A> =>
-    scoped(gen(async function* () {
-      const ctx = yield* layer;
-      return yield* effect.pipe(provideContext(ctx));
-    }));
+const provideLayerUnscoped = <R2, E2, B>(layer: Layer<R2, E2, B>) =>
+<R, E, A>(
+  effect: Effect<R, E, A>,
+): Effect<Exclude<R, B> | R2 | Scope.Scope, E | E2, A> =>
+  gen(async function* () {
+    const ctx = yield* layer;
+    return yield* effect.pipe(provideContext(ctx));
+  });
 
-export function provide<R2, E2, B>(ctx: C.Context<B> | Layer<R2, E2, B>) {
-  return <R, E, A>(effect: Effect<R, E, A>): Effect<Exclude<R, B> | R2, E | E2, A> =>
-    C.isContext(ctx)
-      ? effect.pipe(provideContext(ctx))
-      : effect.pipe(provideLayer(ctx));
+export const provideLayer = <R2, E2, B>(layer: Layer<R2, E2, B>) =>
+<R, E, A>(
+  effect: Effect<R, E, A>,
+): Effect<Exclude<R, B> | R2 | Scope.Scope, E | E2, A> =>
+  scoped(provideLayerUnscoped(layer)(effect));
+
+type ContextFromLayersOrContexts<
+  LayersOrContexts extends ReadonlyArray<C.Context<any> | Layer<any, any, any>>,
+> =
+  | C.Context.Services<LayersOrContexts[number]>
+  | Layer.Services<LayersOrContexts[number]>;
+
+export function provide<
+  LayersOrContexts extends ReadonlyArray<C.Context<any> | Layer<any, any, any>>,
+>(
+  ...layersOrContexts: LayersOrContexts
+) {
+  return <R, E, A>(
+    effect: Effect<R, E, A>,
+  ): Effect<
+    Exclude<R, ContextFromLayersOrContexts<LayersOrContexts>>,
+    E | Layer.Error<LayersOrContexts[number]>,
+    A
+  > =>
+    scoped(layersOrContexts.reduce(
+      (acc, ctx) =>
+        C.isContext(ctx)
+          ? acc.pipe(provideContext(ctx))
+          : acc.pipe(provideLayerUnscoped(ctx)),
+      effect,
+    ));
 }
+
+export const provideService = <Id, S>(tag: Tag<Id, S>, service: S) =>
+  provideContext(C.make(tag, service));
 
 export const scoped = <R, E, A>(
   effect: Effect<R, E, A>,
 ): Effect<Exclude<R, Scope.Scope>, E, A> =>
   gen(async function* () {
-    const parent = yield* new Scope.GetScope();
+    const ctx = yield* context<never>();
+    const parent = yield* ctx.pipe(
+      C.get(Scope.Scope),
+      Option.match(
+        (): AsyncIterable<
+          Scope.GetScope | Effect<never, never, Scope.Scope>,
+          Scope.Scope
+        > => new Scope.GetScope(),
+        success,
+      ),
+    );
     const child = parent.extend();
 
     return yield* effect.pipe(
-      provideContext(C.make(Scope.Scope, child)),
+      provideService(Scope.Scope, child),
       onExit((exit) => child.close(exit)),
     );
   });
