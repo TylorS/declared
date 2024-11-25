@@ -788,3 +788,9 @@ export const matchCause = <E, R2, E2, B, A, R3, E3, C>(
 ) =>
 <R>(effect: Effect<R, E, A>): Effect<R | R2 | R3, E2 | E3, B | C> =>
   new MatchCause(effect, f, g);
+
+export const exit = <R, E, A>(effect: Effect<R, E, A>): Effect<R, never, Exit.Exit<E, A>> =>
+  effect.pipe(matchCause(
+    (cause) => success(Exit.failure(cause)),
+    (value) => success(Exit.success(value)),
+  ));

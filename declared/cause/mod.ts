@@ -1,5 +1,6 @@
 import type { NonEmptyArray } from "@declared/array";
 import * as AsyncIterable from "@declared/async_iterable";
+import * as internal_stringify from '../internal/stringify.ts'
 
 export type Cause<E> =
   | Empty
@@ -97,4 +98,8 @@ export const expectedOrNever = <E, R1, R2>(
     return failure ? onFailure(failure.cause) : onNever(cause);
   }
   return onNever(cause);
+};
+
+export const stringify = <E>(cause: Cause<E>): string => {
+  return internal_stringify.stringify(cause);
 };

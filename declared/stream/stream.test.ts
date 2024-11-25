@@ -92,6 +92,31 @@ Deno.test("Stream operators", async (t) => {
       assertEquals(values, [2, 3, 4]);
     },
   );
+
+  await t.step("catchError - handles errors", async () => {
+    const values = await Stream.expected("test error").pipe(
+      Stream.catchError(Stream.of),
+      Stream.toArray,
+    );
+    assertEquals(values, ["test error"]);
+  });
+
+  await t.step("catchAll - handles all errors", async () => {
+    const result = await Stream.unexpected(new Error("test error")).pipe(
+      Stream.catchAll(() => Stream.of("recovered")),
+      Stream.toArray,
+    );
+
+    assertEquals(result, ["recovered"]);
+  });
+
+  await t.step("catchError - handles expected errors", async () => {
+    const result = await Stream.expected("test error").pipe(
+      Stream.catchError(Stream.of),
+      Stream.toArray,
+    );
+    assertEquals(result, ["test error"]);
+  });
 });
 
 Deno.test("Stream timing", async (t) => {

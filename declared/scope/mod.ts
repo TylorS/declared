@@ -24,7 +24,6 @@ class ScopeImpl implements Scope {
 
   private finalizers: Set<Finalizer> = new Set();
   private disposable = settable();
-  private exit: Exit<unknown, unknown> | null = null;
 
   addDisposable(disposable: Disposable | AsyncDisposable): Disposable {
     return this.disposable.add(disposable);
@@ -52,9 +51,8 @@ class ScopeImpl implements Scope {
 
   close(exit: Exit<unknown, unknown>): Effect.Effect<never, never, unknown> {
     return Effect.gen(this, async function* () {
-      this.exit = exit;
       for (const finalizer of Array.from(this.finalizers).reverse()) {
-        yield* finalizer(exit);
+        yield* finalizer(exit).pipe(Effect.exit);
       }
       await this.disposable[Symbol.asyncDispose]();
     });
