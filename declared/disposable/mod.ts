@@ -30,6 +30,7 @@ export const dispose = async (
 
 export interface Settable extends AsyncDisposable {
   isDisposed(): boolean;
+  size(): number;
   add(disposable: Disposable | AsyncDisposable): Disposable;
   extend(): Settable;
 }
@@ -73,6 +74,7 @@ export function settable(): Settable {
   return {
     isDisposed: () => isDisposed,
     add,
+    size: () => disposables.length,
     extend() {
       if (isDisposed) {
         throw new Error(CANNOT_EXTEND_DISPOSED_ERROR);

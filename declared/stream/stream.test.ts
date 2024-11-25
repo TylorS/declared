@@ -74,6 +74,24 @@ Deno.test("Stream operators", async (t) => {
       assertEquals(values, [2, 4]);
     },
   );
+
+  await t.step(
+    "flatMapConcurrently - allows controlling the number of concurrent operations",
+    async () => {
+      const values = await Stream.fromArray([1, 2, 3]).pipe(
+        Stream.flatMapConcurrently(
+          (n) =>
+            Stream.of(n + 1).pipe(
+              Stream.delay(Duration.millis(300 - (n * 100))),
+            ),
+          1,
+        ),
+        Stream.toArray,
+      );
+
+      assertEquals(values, [2, 3, 4]);
+    },
+  );
 });
 
 Deno.test("Stream timing", async (t) => {
@@ -95,21 +113,20 @@ Deno.test("Stream timing", async (t) => {
   });
 
   await t.step("periodic - emits values periodically", async () => {
-    //   const values: number[] = [];
-    //   const disposable = Stream.runFork(
-    //     Stream.periodic(Duration.millis(50)).pipe(
-    //       Stream.flatMap(() => {
-    //         values.push(1);
-    //         return Stream.of(undefined);
-    //       }),
-    //     ),
-    //   );
+    const values: number[] = [];
+    const disposable = Stream.runFork(
+      Stream.periodic(Duration.millis(50)).pipe(
+        Stream.flatMap(() => {
+          values.push(1);
+          return Stream.of(undefined);
+        }),
+      ),
+    );
 
-    //   await delay(175); // Should allow for 3 emissions
-    //   await disposable[Symbol.asyncDispose]();
+    await new Promise((resolve) => setTimeout(resolve, 175)); // Should allow for 3 emissions
+    await disposable[Symbol.asyncDispose]();
 
-    //   assertEquals(values.length, 3, "Should have emitted 3 times");
-    // });
+    assertEquals(values.length, 3, "Should have emitted 3 times");
   });
 });
 
@@ -135,8 +152,8 @@ Deno.test("Stream error handling", async (t) => {
     await assertRejects(
       () =>
         Stream.run(
-          Stream.make((sink, scheduler) => {
-            scheduler.asap(Task.propagateError(sink, error));
+          Stream.make((sink, runtime) => {
+            runtime.scheduler.asap(Task.propagateError(sink, error));
             return {
               [Symbol.dispose]: () => {
                 disposed = true;

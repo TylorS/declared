@@ -335,6 +335,87 @@ export function exhaustLatestMap<A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>) {
     });
 }
 
+class FlatMapConcurrently<R, E, A, R2, E2, B>
+  implements Stream<R | R2, E | E2, B> {
+  constructor(
+    readonly stream: Stream<R, E, A>,
+    readonly f: (a: A) => Stream<R2, E2, B>,
+    readonly concurrency: number,
+  ) {}
+
+  run(sink: Sink.Sink<E | E2, B>, runtime: Effect.Effect.Runtime<R | R2>) {
+    const scope = runtime.scope.extend();
+    const innerRuntime = { ...runtime, scope };
+    const waiting: Array<Stream<R2, E2, B>> = [];
+    let running = 0;
+    let outerEnded = false;
+
+    const runStream = (stream: Stream<R2, E2, B>) => {
+      if (running >= this.concurrency) {
+        waiting.push(stream);
+        return;
+      }
+
+      running++;
+
+      const inner = scope.extend();
+
+      inner.addDisposable(Disposable.sync(() => {
+        running--;
+        if (outerEnded && running === 0 && waiting.length === 0) {
+          sink.end();
+        } else if (waiting.length > 0) {
+          runStream(waiting.shift()!);
+        }
+      }));
+
+      inner.addDisposable(
+        stream.run(
+          Sink.make(
+            sink.error,
+            sink.event,
+            () => {
+              return inner.close(Exit.void).run(innerRuntime);
+            },
+          ),
+          { ...runtime, scope: inner },
+        ),
+      );
+
+      return inner;
+    };
+
+    scope.addDisposable(this.stream.run(
+      Sink.make(
+        sink.error,
+        (value) => {
+          runStream(this.f(value));
+        },
+        () => {
+          outerEnded = true;
+          if (running === 0) {
+            sink.end();
+          }
+        },
+      ),
+      innerRuntime,
+    ));
+
+    return Disposable.async(() =>
+      scope.close(Exit.interrupted()).run(innerRuntime)
+    );
+  }
+
+  pipe() {
+    return pipeArguments(this, arguments);
+  }
+}
+
+export const flatMapConcurrently =
+  <A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>, concurrency: number) =>
+  <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
+    new FlatMapConcurrently(stream, f, concurrency);
+
 export interface StreamFiber<E> extends AsyncDisposable {
   readonly exit: Promise<Exit.Exit<E, void>>;
 }

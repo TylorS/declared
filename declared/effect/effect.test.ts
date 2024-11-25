@@ -176,7 +176,7 @@ Deno.test("Effect - uninterruptible regions", async () => {
   // Wait for the fiber to complete
   const exit = await fiber.exit;
 
-  // The code in uninterruptible should have executed despite interruption
+  // // The code in uninterruptible should have executed despite interruption
   assertEquals(executed, true);
   assert(exit._id === "Failure");
   assertEquals(exit.cause, new Cause.Interrupted());

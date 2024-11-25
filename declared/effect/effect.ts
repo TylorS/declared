@@ -18,13 +18,13 @@ export const EFFECT_ID = "Effect" as const;
 
 export abstract class Effect<out R, out E, out A>
   extends AsyncIterable.Yieldable(EFFECT_ID)<A> {
-  abstract run(
-    runtime: Effect.Runtime<R>,
+  abstract run<R2>(
+    runtime: Effect.Runtime<R | R2>,
   ): Promise<Exit.Exit<E, A>>;
 }
 
 export declare namespace Effect {
-  export type Runtime<in R> = {
+  export type Runtime<R> = {
     readonly context: C.Context<R>;
     readonly localVars: LocalVars.LocalVars;
     readonly scope: Scope.Scope;
@@ -428,6 +428,26 @@ class FiberImpl<R, E, A> extends Effect<never, E, A> implements Fiber<E, A> {
     ));
   }
 
+  /**
+   * @internal
+   */
+  startNow() {
+    void this.effect.run(this.runtime).then(
+      (result) =>
+        this.runtime.scope.close(result).run(this.runtime).finally(() => {
+          this.exitDeferred.resolve(result);
+          this.interruptDeferred.resolve(result);
+        }),
+      (defect) => {
+        const e = Exit.unexpected(defect);
+        return this.runtime.scope.close(e).run(this.runtime).finally(() => {
+          this.exitDeferred.resolve(e);
+          this.interruptDeferred.resolve(e);
+        });
+      },
+    );
+  }
+
   readonly [Symbol.asyncDispose] = () => this.dispose();
 
   private dispose = async () => {
@@ -450,21 +470,32 @@ class FiberImpl<R, E, A> extends Effect<never, E, A> implements Fiber<E, A> {
   };
 }
 
+export type RunForkOptions = {
+  readonly immediate?: boolean;
+};
+
 export const makeRunFork =
-  <R>(runtime: Effect.Runtime<R>) =>
+  <R>(runtime: Effect.Runtime<R>, { immediate = false }: RunForkOptions = {}) =>
   <E, A>(effect: Effect<R, E, A>): Fiber<E, A> => {
     const scope = runtime.scope.extend();
     const localVars = runtime.localVars.fork();
     const fiberRuntime = { ...runtime, localVars, scope };
 
     const fiber = new FiberImpl<R, E, A>(fiberRuntime, effect);
-    fiber.start();
+    if (immediate) {
+      fiber.startNow();
+    } else {
+      fiber.start();
+    }
 
     return fiber;
   };
 
-export const makeRuntime = <R>(runtime: Effect.Runtime<R>) => {
-  const runFork = makeRunFork(runtime);
+export const makeRuntime = <R>(
+  runtime: Effect.Runtime<R>,
+  options?: RunForkOptions,
+) => {
+  const runFork = makeRunFork(runtime, options);
   return ({
     runFork,
     runExit: <E, A>(effect: Effect<R, E, A>): Promise<Exit.Exit<E, A>> =>
@@ -489,7 +520,9 @@ export const defaultRuntime: Effect.Runtime<never> = {
   scheduler: defaultScheduler,
 };
 
-export const { runFork, runExit, run } = makeRuntime(defaultRuntime);
+export const { runFork, runExit, run } = makeRuntime(defaultRuntime, {
+  immediate: true,
+});
 
 class MapEffect<R, E, A, B> extends Effect<R, E, B> {
   constructor(readonly effect: Effect<R, E, A>, readonly f: (a: A) => B) {
