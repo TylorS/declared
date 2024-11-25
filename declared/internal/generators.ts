@@ -7,7 +7,7 @@ export class ThisIterable<out O> implements Pipeable {
 
   pipe() {
     return pipeArguments(this, arguments);
-  };
+  }
 }
 
 export class OnceIterator<I, O> implements AsyncIterator<I, O> {

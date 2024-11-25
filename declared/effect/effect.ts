@@ -12,7 +12,7 @@ import * as Option from "@declared/option";
 import * as Scheduler from "@declared/scheduler";
 import * as Scope from "@declared/scope";
 import { Tag } from "@declared/tag";
-import { flow } from "@declared/function";
+import { constant, flow } from "@declared/function";
 import { Layer } from "../layer/mod.ts";
 
 export const EFFECT_ID = "Effect" as const;
@@ -82,6 +82,12 @@ class Success<A> extends Effect<never, never, A> {
 
 export const success = <A>(value: A): Effect<never, never, A> =>
   new Success(value);
+
+const void_ = success<void>(undefined);
+const null_ = success<null>(null);
+const undefined_ = success(undefined);
+
+export { null_ as null, undefined_ as undefined, void_ as void };
 
 class Failure<E> extends Effect<never, E, never> {
   private _result: Promise<Exit.Exit<E, never>>;
@@ -548,6 +554,10 @@ export const map = <A, B>(f: (a: A) => B) =>
   effect: Effect<R, E, A>,
 ): Effect<R, E, B> => MapEffect.make(effect, f);
 
+export const as = <B>(
+  b: B,
+): <R, E, A>(effect: Effect<R, E, A>) => Effect<R, E, B> => map(constant(b));
+
 class FlatMapEffect<R, E, A, R2, E2, B> extends Effect<R | R2, E | E2, B> {
   constructor(
     readonly effect: Effect<R, E, A>,
@@ -893,8 +903,8 @@ export const exit = <R, E, A>(
     (value) => success(Exit.success(value)),
   ));
 
-export const onExit = <E, A, R2, E2, B>(
-  f: (exit: Exit.Exit<E, A>) => Effect<R2, E2, B>,
+export const onExit = <E, A, R2, E2>(
+  f: (exit: Exit.Exit<E, A>) => Effect<R2, E2, unknown>,
 ) =>
 <R>(effect: Effect<R, E, A>): Effect<R | R2, E | E2, A> =>
   effect.pipe(matchCause(
@@ -903,5 +913,19 @@ export const onExit = <E, A, R2, E2, B>(
         (cause2) => failure(Cause.sequential<E | E2>([cause, cause2])),
         () => failure(cause),
       )),
-    (value) => f(Exit.success(value)).pipe(map(() => value)),
+    (value) => f(Exit.success(value)).pipe(as(value)),
   ));
+
+export const onCause = <E, R2, E2>(
+  f: (cause: Cause.Cause<E>) => Effect<R2, E2, unknown>,
+) =>
+<R, A>(effect: Effect<R, E, A>): Effect<R | R2, E | E2, A> =>
+  effect.pipe(
+    onExit((exit) => Exit.isFailure(exit) ? f(exit.cause) : void_),
+  );
+
+export const onError = <E, R2, E2>(
+  f: (error: E) => Effect<R2, E2, unknown>,
+) =>
+<R, A>(effect: Effect<R, E, A>): Effect<R | R2, E | E2, A> =>
+  effect.pipe(onCause(Cause.expectedOrNever(f, () => void_)));

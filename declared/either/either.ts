@@ -20,3 +20,23 @@ export class Right<const Success>
     super();
   }
 }
+
+export const isLeft = <E, S>(either: Either<E, S>): either is Left<E> =>
+  either._id === Left._id;
+
+export const isRight = <E, S>(either: Either<E, S>): either is Right<S> =>
+  either._id === Right._id;
+
+export const map =
+  <E, A, B>(f: (a: A) => B) => (either: Either<E, A>): Either<E, B> =>
+    isLeft(either) ? either : new Right(f(either.value));
+
+export const match =
+  <E, A, B>(onLeft: (e: E) => B, onRight: (a: A) => B) =>
+  (either: Either<E, A>): B =>
+    isLeft(either) ? onLeft(either.cause) : onRight(either.value);
+
+export const flatMap =
+  <E, A, B>(f: (a: A) => Either<E, B>) =>
+  (either: Either<E, A>): Either<E, B> =>
+    isLeft(either) ? either : f(either.value);

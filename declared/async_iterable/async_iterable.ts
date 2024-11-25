@@ -67,11 +67,11 @@ export const AggregateFailure = <const Id extends string>(id: Id) =>
     override readonly pipe: Pipeable["pipe"] = super.pipe;
 
     constructor(
-      errors: E,
+      override readonly cause: E,
       options?: ErrorOptions & { message?: string },
     ) {
       super(
-        Array.from(errors),
+        Array.from(cause),
         options?.message ?? "AggregateFailure",
         options,
       );

@@ -22,6 +22,7 @@
     "./local_var": "./local_var/mod.ts",
     "./local_vars": "./local_vars/mod.ts",
     "./map": "./map/mod.ts",
+    "./number": "./number/mod.ts",
     "./option": "./option/mod.ts",
     "./pipeable": "./pipeable/mod.ts",
     "./predicate": "./predicate/mod.ts",

@@ -19,8 +19,7 @@ export declare namespace Context {
     readonly _Resources: (_: never) => Resources;
   }
 
-  export type Services<C> = C extends Context<infer Services>
-    ? Services
+  export type Services<C> = C extends Context<infer Services> ? Services
     : never;
 }
 

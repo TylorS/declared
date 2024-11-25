@@ -3,7 +3,6 @@ export interface Task {
   error(error: unknown): void | PromiseLike<unknown>;
 }
 
-
 export const make = (
   run: () => void | PromiseLike<unknown>,
   error: (error: unknown) => void | PromiseLike<unknown>,
