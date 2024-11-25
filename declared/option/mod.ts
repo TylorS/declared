@@ -2,7 +2,7 @@ import * as AsyncIterable from "@declared/async_iterable";
 
 export type Option<Value> = Some<Value> | None;
 
-export class Some<Value> extends AsyncIterable.Yieldable("Some")<Value> {
+export class Some<out Value> extends AsyncIterable.Yieldable("Some")<Value> {
   constructor(readonly value: Value) {
     super();
   }

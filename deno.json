@@ -17,6 +17,7 @@
     "@declared/exit": "./declared/exit/mod.ts",
     "@declared/fiber": "./declared/fiber/mod.ts",
     "@declared/function": "./declared/function/mod.ts",
+    "@declared/layer": "./declared/layer/mod.ts",
     "@declared/local_var": "./declared/local_var/mod.ts",
     "@declared/local_vars": "./declared/local_vars/mod.ts",
     "@declared/map": "./declared/map/mod.ts",

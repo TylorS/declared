@@ -91,10 +91,5 @@ export const map = <A, B>(
   iterable: AsyncIterable<Yield, A>,
 ): AsyncIterable<Yield, B> =>
   make(async function* () {
-    const i = iterator(iterable);
-    let result = await i.next();
-    while (!result.done) {
-      result = await i.next(yield result.value);
-    }
-    return f(result.value);
+    return f(yield* iterable);
   });

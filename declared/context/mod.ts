@@ -75,3 +75,6 @@ export const merge =
 
 export class GetContext<R>
   extends AsyncIterable.Yieldable(`GetContext`)<Context<R>> {}
+
+export const isContext = (value: unknown): value is Context<any> =>
+  typeof value === "object" && value !== null && TypeId in value;

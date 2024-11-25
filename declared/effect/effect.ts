@@ -13,6 +13,7 @@ import * as Scheduler from "@declared/scheduler";
 import * as Scope from "@declared/scope";
 import { Tag } from "@declared/tag";
 import { flow } from "@declared/function";
+import { Layer } from "../layer/mod.ts";
 
 export const EFFECT_ID = "Effect" as const;
 
@@ -547,6 +548,42 @@ export const map = <A, B>(f: (a: A) => B) =>
   effect: Effect<R, E, A>,
 ): Effect<R, E, B> => MapEffect.make(effect, f);
 
+class FlatMapEffect<R, E, A, R2, E2, B> extends Effect<R | R2, E | E2, B> {
+  constructor(
+    readonly effect: Effect<R, E, A>,
+    readonly f: (a: A) => Effect<R2, E2, B>,
+  ) {
+    super();
+  }
+
+  run(runtime: Effect.Runtime<R | R2>): Promise<Exit.Exit<E | E2, B>> {
+    return this.effect.run(runtime).then((
+      exit,
+    ): Promise<Exit.Exit<E | E2, B>> | Exit.Exit<E | E2, B> =>
+      Exit.isSuccess(exit) ? this.f(exit.value).run(runtime) : exit
+    );
+  }
+
+  static make = <R, E, A, R2, E2, B>(
+    effect: Effect<R, E, A>,
+    f: (a: A) => Effect<R2, E2, B>,
+  ): Effect<R | R2, E | E2, B> => {
+    if (effect instanceof MapEffect) {
+      return new FlatMapEffect(
+        effect.effect,
+        (a) => f(effect.f(a)),
+      );
+    }
+
+    return new FlatMapEffect(effect, f);
+  };
+}
+
+export const flatMap = <A, R2, E2, B>(f: (a: A) => Effect<R2, E2, B>) =>
+<R, E>(
+  effect: Effect<R, E, A>,
+): Effect<R | R2, E | E2, B> => FlatMapEffect.make(effect, f);
+
 class FilterMapEffect<R, E, A, B> extends Effect<R, E, B> {
   constructor(
     readonly effect: Effect<R, E, A>,
@@ -747,13 +784,32 @@ export const provideContext =
   <R, E, A>(effect: Effect<R, E, A>): Effect<Exclude<R, R2>, E, A> =>
     new ProvideContext(effect, ctx);
 
+export const provideLayer =
+  <R2, E2, B>(layer: Layer<R2, E2, B>) =>
+  <R, E, A>(effect: Effect<R, E, A>): Effect<Exclude<R, B> | R2, E | E2, A> =>
+    scoped(gen(async function* () {
+      const ctx = yield* layer;
+      return yield* effect.pipe(provideContext(ctx));
+    }));
+
+export function provide<R2, E2, B>(ctx: C.Context<B> | Layer<R2, E2, B>) {
+  return <R, E, A>(effect: Effect<R, E, A>): Effect<Exclude<R, B> | R2, E | E2, A> =>
+    C.isContext(ctx)
+      ? effect.pipe(provideContext(ctx))
+      : effect.pipe(provideLayer(ctx));
+}
+
 export const scoped = <R, E, A>(
   effect: Effect<R, E, A>,
 ): Effect<Exclude<R, Scope.Scope>, E, A> =>
   gen(async function* () {
     const parent = yield* new Scope.GetScope();
     const child = parent.extend();
-    return yield* effect.pipe(provideContext(C.make(Scope.Scope, child)));
+
+    return yield* effect.pipe(
+      provideContext(C.make(Scope.Scope, child)),
+      onExit((exit) => child.close(exit)),
+    );
   });
 
 class MatchCause<R, E, A, R2, E2, B, R3, E3, C>
@@ -789,8 +845,23 @@ export const matchCause = <E, R2, E2, B, A, R3, E3, C>(
 <R>(effect: Effect<R, E, A>): Effect<R | R2 | R3, E2 | E3, B | C> =>
   new MatchCause(effect, f, g);
 
-export const exit = <R, E, A>(effect: Effect<R, E, A>): Effect<R, never, Exit.Exit<E, A>> =>
+export const exit = <R, E, A>(
+  effect: Effect<R, E, A>,
+): Effect<R, never, Exit.Exit<E, A>> =>
   effect.pipe(matchCause(
     (cause) => success(Exit.failure(cause)),
     (value) => success(Exit.success(value)),
+  ));
+
+export const onExit = <E, A, R2, E2, B>(
+  f: (exit: Exit.Exit<E, A>) => Effect<R2, E2, B>,
+) =>
+<R>(effect: Effect<R, E, A>): Effect<R | R2, E | E2, A> =>
+  effect.pipe(matchCause(
+    (cause) =>
+      f(Exit.failure(cause)).pipe(matchCause(
+        (cause2) => failure(Cause.sequential<E | E2>([cause, cause2])),
+        () => failure(cause),
+      )),
+    (value) => f(Exit.success(value)).pipe(map(() => value)),
   ));
