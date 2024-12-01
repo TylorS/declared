@@ -14,6 +14,7 @@ import * as Scope from "@declared/scope";
 import { Tag } from "@declared/tag";
 import { constant, flow } from "@declared/function";
 import { Layer } from "../layer/mod.ts";
+import type { Fiber } from "../fiber/mod.ts";
 
 export const EFFECT_ID = "Effect" as const;
 
@@ -380,10 +381,6 @@ export function gen<T, Y extends Effect.Instruction<any, any, any>, A>(
   return new Gen(() => args[1].call(args[0]));
 }
 
-export interface Fiber<E, A> extends AsyncDisposable, Effect<never, E, A> {
-  readonly exit: Promise<Exit.Exit<E, A>>;
-}
-
 export const suspend = <R, E, A>(f: () => Effect<R, E, A>): Effect<R, E, A> =>
   gen(async function* () {
     return yield* f();
@@ -465,6 +462,11 @@ class FiberImpl<R, E, A> extends Effect<never, E, A> implements Fiber<E, A> {
   }
 
   readonly [Symbol.asyncDispose] = () => this.dispose();
+
+  interrupt = fromPromise(() => {
+    this.dispose()
+    return this.exitDeferred.promise;
+  })
 
   private dispose = async () => {
     const interrupt = Exit.interrupted();
