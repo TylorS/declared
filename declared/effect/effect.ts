@@ -68,6 +68,15 @@ export declare namespace Effect {
     | Effect<R, E, A>;
 }
 
+class Make<R, E, A> extends Effect<R, E, A> {
+  constructor(readonly run: (runtime: Effect.Runtime<R>) => Promise<Exit.Exit<E, A>>) {
+    super();
+  }
+}
+
+export const make = <R, E, A>(run: (runtime: Effect.Runtime<R>) => Promise<Exit.Exit<E, A>>): Effect<R, E, A> =>
+  new Make(run);
+
 class Success<A> extends Effect<never, never, A> {
   private _result: Promise<Exit.Exit<never, A>>;
   constructor(readonly value: A) {
@@ -201,8 +210,8 @@ class SetVarLocally<R, E, A, B> extends Effect<R, E, A> {
 
 export const setVarLocally =
   <A>(localVar: LocalVar.LocalVar<A>, value: A) =>
-  <R, E, B>(effect: Effect<R, E, B>): Effect<R, E, B> =>
-    new SetVarLocally(effect, localVar, value);
+    <R, E, B>(effect: Effect<R, E, B>): Effect<R, E, B> =>
+      new SetVarLocally(effect, localVar, value);
 
 class SetInterruptStatus<R, E, A> extends Effect<R, E, A> {
   constructor(readonly effect: Effect<R, E, A>, readonly value: boolean) {
@@ -483,20 +492,25 @@ export type RunForkOptions = {
 
 export const makeRunFork =
   <R>(runtime: Effect.Runtime<R>, { immediate = false }: RunForkOptions = {}) =>
-  <E, A>(effect: Effect<R, E, A>): Fiber<E, A> => {
-    const scope = runtime.scope.extend();
-    const localVars = runtime.localVars.fork();
-    const fiberRuntime = { ...runtime, localVars, scope };
+    <E, A>(effect: Effect<R, E, A>): Fiber<E, A> => {
+      const scope = runtime.scope.extend();
+      const localVars = runtime.localVars.fork();
+      const fiberRuntime = {
+        context: runtime.context,
+        localVars,
+        scope,
+        scheduler: runtime.scheduler
+      };
 
-    const fiber = new FiberImpl<R, E, A>(fiberRuntime, effect);
-    if (immediate) {
-      fiber.startNow();
-    } else {
-      fiber.start();
-    }
+      const fiber = new FiberImpl<R, E, A>(fiberRuntime, effect);
+      if (immediate) {
+        fiber.startNow();
+      } else {
+        fiber.start();
+      }
 
-    return fiber;
-  };
+      return fiber;
+    };
 
 export const makeRuntime = <R>(
   runtime: Effect.Runtime<R>,
@@ -550,9 +564,9 @@ class MapEffect<R, E, A, B> extends Effect<R, E, B> {
 }
 
 export const map = <A, B>(f: (a: A) => B) =>
-<R, E>(
-  effect: Effect<R, E, A>,
-): Effect<R, E, B> => MapEffect.make(effect, f);
+  <R, E>(
+    effect: Effect<R, E, A>,
+  ): Effect<R, E, B> => MapEffect.make(effect, f);
 
 export const as = <B>(
   b: B,
@@ -590,9 +604,9 @@ class FlatMapEffect<R, E, A, R2, E2, B> extends Effect<R | R2, E | E2, B> {
 }
 
 export const flatMap = <A, R2, E2, B>(f: (a: A) => Effect<R2, E2, B>) =>
-<R, E>(
-  effect: Effect<R, E, A>,
-): Effect<R | R2, E | E2, B> => FlatMapEffect.make(effect, f);
+  <R, E>(
+    effect: Effect<R, E, A>,
+  ): Effect<R | R2, E | E2, B> => FlatMapEffect.make(effect, f);
 
 class FilterMapEffect<R, E, A, B> extends Effect<R, E, B> {
   constructor(
@@ -633,9 +647,9 @@ class FilterMapEffect<R, E, A, B> extends Effect<R, E, B> {
 }
 
 export const filterMap = <A, B>(f: (a: A) => Option.Option<B>) =>
-<R, E>(
-  effect: Effect<R, E, A>,
-): Effect<R, E, B> => FilterMapEffect.make(effect, f);
+  <R, E>(
+    effect: Effect<R, E, A>,
+  ): Effect<R, E, B> => FilterMapEffect.make(effect, f);
 
 export const none = () => fromInstruction(Option.none());
 
@@ -667,14 +681,14 @@ class CatchAll<R, E, A, R2, E2, B> extends Effect<R | R2, E2, A | B> {
 export const catchAll = <E, R2, E2, B>(
   f: (cause: Cause.Cause<E>) => Effect<R2, E2, B>,
 ) =>
-<R, A>(effect: Effect<R, E, A>): Effect<R | R2, E2, A | B> =>
-  new CatchAll(effect, f);
+  <R, A>(effect: Effect<R, E, A>): Effect<R | R2, E2, A | B> =>
+    new CatchAll(effect, f);
 
 export const catchError = <E, R2, E2, B>(
   f: (cause: E) => Effect<R2, E2, B>,
 ) =>
-<R, A>(effect: Effect<R, E, A>): Effect<R | R2, E2, A | B> =>
-  effect.pipe(catchAll(Cause.expectedOrNever(f, failure)));
+  <R, A>(effect: Effect<R, E, A>): Effect<R | R2, E2, A | B> =>
+    effect.pipe(catchAll(Cause.expectedOrNever(f, failure)));
 
 class Fork<R, E, A> extends Effect<R, never, Fiber<E, A>> {
   constructor(readonly effect: Effect<R, E, A>) {
@@ -791,23 +805,23 @@ class ProvideContext<R, E, A, R2> extends Effect<Exclude<R, R2>, E, A> {
 
 export const provideContext =
   <R2>(ctx: C.Context<R2>) =>
-  <R, E, A>(effect: Effect<R, E, A>): Effect<Exclude<R, R2>, E, A> =>
-    new ProvideContext(effect, ctx);
+    <R, E, A>(effect: Effect<R, E, A>): Effect<Exclude<R, R2>, E, A> =>
+      new ProvideContext(effect, ctx);
 
 const provideLayerUnscoped = <R2, E2, B>(layer: Layer<R2, E2, B>) =>
-<R, E, A>(
-  effect: Effect<R, E, A>,
-): Effect<Exclude<R, B> | R2 | Scope.Scope, E | E2, A> =>
-  gen(async function* () {
-    const ctx = yield* layer;
-    return yield* effect.pipe(provideContext(ctx));
-  });
+  <R, E, A>(
+    effect: Effect<R, E, A>,
+  ): Effect<Exclude<R, B> | R2 | Scope.Scope, E | E2, A> =>
+    gen(async function* () {
+      const ctx = yield* layer;
+      return yield* effect.pipe(provideContext(ctx));
+    });
 
 export const provideLayer = <R2, E2, B>(layer: Layer<R2, E2, B>) =>
-<R, E, A>(
-  effect: Effect<R, E, A>,
-): Effect<Exclude<R, B> | R2 | Scope.Scope, E | E2, A> =>
-  scoped(provideLayerUnscoped(layer)(effect));
+  <R, E, A>(
+    effect: Effect<R, E, A>,
+  ): Effect<Exclude<R, B> | R2 | Scope.Scope, E | E2, A> =>
+    scoped(provideLayerUnscoped(layer)(effect));
 
 type ContextFromLayersOrContexts<
   LayersOrContexts extends ReadonlyArray<C.Context<any> | Layer<any, any, any>>,
@@ -892,8 +906,8 @@ export const matchCause = <E, R2, E2, B, A, R3, E3, C>(
   f: (cause: Cause.Cause<E>) => Effect<R2, E2, B>,
   g: (value: A) => Effect<R3, E3, C>,
 ) =>
-<R>(effect: Effect<R, E, A>): Effect<R | R2 | R3, E2 | E3, B | C> =>
-  new MatchCause(effect, f, g);
+  <R>(effect: Effect<R, E, A>): Effect<R | R2 | R3, E2 | E3, B | C> =>
+    new MatchCause(effect, f, g);
 
 export const exit = <R, E, A>(
   effect: Effect<R, E, A>,
@@ -906,26 +920,158 @@ export const exit = <R, E, A>(
 export const onExit = <E, A, R2, E2>(
   f: (exit: Exit.Exit<E, A>) => Effect<R2, E2, unknown>,
 ) =>
-<R>(effect: Effect<R, E, A>): Effect<R | R2, E | E2, A> =>
-  effect.pipe(matchCause(
-    (cause) =>
-      f(Exit.failure(cause)).pipe(matchCause(
-        (cause2) => failure(Cause.sequential<E | E2>([cause, cause2])),
-        () => failure(cause),
-      )),
-    (value) => f(Exit.success(value)).pipe(as(value)),
-  ));
+  <R>(effect: Effect<R, E, A>): Effect<R | R2, E | E2, A> =>
+    effect.pipe(matchCause(
+      (cause) =>
+        f(Exit.failure(cause)).pipe(matchCause(
+          (cause2) => failure(Cause.sequential<E | E2>([cause, cause2])),
+          () => failure(cause),
+        )),
+      (value) => f(Exit.success(value)).pipe(as(value)),
+    ));
 
 export const onCause = <E, R2, E2>(
   f: (cause: Cause.Cause<E>) => Effect<R2, E2, unknown>,
 ) =>
-<R, A>(effect: Effect<R, E, A>): Effect<R | R2, E | E2, A> =>
-  effect.pipe(
-    onExit((exit) => Exit.isFailure(exit) ? f(exit.cause) : void_),
-  );
+  <R, A>(effect: Effect<R, E, A>): Effect<R | R2, E | E2, A> =>
+    effect.pipe(
+      onExit((exit) => Exit.isFailure(exit) ? f(exit.cause) : void_),
+    );
 
 export const onError = <E, R2, E2>(
   f: (error: E) => Effect<R2, E2, unknown>,
 ) =>
-<R, A>(effect: Effect<R, E, A>): Effect<R | R2, E | E2, A> =>
-  effect.pipe(onCause(Cause.expectedOrNever(f, () => void_)));
+  <R, A>(effect: Effect<R, E, A>): Effect<R | R2, E | E2, A> =>
+    effect.pipe(onCause(Cause.expectedOrNever(f, () => void_)));
+
+export const zipWith = <R2, E2, B, A, C>(
+  that: Effect<R2, E2, B>,
+  f: (a: A, b: B) => C,
+): <R, E>(effect: Effect<R, E, A>) => Effect<R | R2, E | E2, C> =>
+  flatMap((a) => that.pipe(map((b) => f(a, b))))
+
+export const forEach = <A, R2, E2, B>(
+  f: (a: A) => Effect<R2, E2, B>,
+) =>
+  (iterable: Iterable<A>): Effect<R2, E2, ReadonlyArray<B>> => {
+    return make((r) => {
+      const runFork = makeRunFork(r);
+      return new Promise<Exit.Exit<E2, ReadonlyArray<B>>>((resolve) => {
+        const array = Array.from(iterable);
+        const length = array.length;
+
+        if (length === 0) {
+          resolve(Exit.success([]));
+          return;
+        }
+
+        const results = new Array<B>(length);
+        let completed = 0;
+        let failed = false;
+
+        // Pre-allocate fibers array
+        const fibers = new Array(length);
+
+        for (let i = 0; i < length; i++) {
+          const effect = f(array[i]).pipe(
+            matchCause(
+              (cause) => sync(() => {
+                if (!failed) {
+                  failed = true;
+                  // Use Promise.allSettled to ensure all fibers are cleaned up
+                  Promise.all(fibers.map(f => Disposable.asyncDispose(f)))
+                    .finally(() => resolve(Exit.failure(cause)));
+                }
+              }),
+              (value) => sync(() => {
+                if (!failed) {
+                  results[i] = value;
+                  completed++;
+
+                  if (completed === length) {
+                    resolve(Exit.success(results));
+                  }
+                }
+              })
+            )
+          );
+
+          fibers[i] = runFork(effect);
+        }
+      });
+    });
+  }
+
+export const forEachSequential = <A, R2, E2, B>(
+  f: (a: A) => Effect<R2, E2, B>,
+) =>
+  (iterable: Iterable<A>): Effect<R2, E2, ReadonlyArray<B>> => {
+    return gen(async function* () {
+      const output: B[] = [];
+
+      for (const a of iterable) {
+        output.push(yield* f(a));
+      }
+
+      return output;
+    });
+  }
+
+export const forEachConcurrent = <A, R2, E2, B>(
+  f: (a: A) => Effect<R2, E2, B>,
+  concurrency: number,
+) =>
+  (iterable: Iterable<A>): Effect<R2, E2, ReadonlyArray<B>> => {
+    return make((r) => {
+      const runFork = makeRunFork(r);
+      return new Promise((resolve) => {
+        const iterator = Array.from(iterable)[Symbol.iterator]();
+        const results: B[] = [];
+        const fibers: Fiber<never, void>[] = [];
+        let failed = false;
+        let completed = 0;
+        let running = 0;
+        let index = 0;
+
+        const startNext = () => {
+          const next = iterator.next();
+          if (next.done) return;
+
+          const i = index++;
+          const effect = f(next.value).pipe(
+            matchCause(
+              (cause) => sync(() => {
+                if (!failed) {
+                  failed = true;
+                  // Use Promise.allSettled to ensure all fibers are cleaned up
+                  Promise.all(fibers.map(f => Disposable.asyncDispose(f)))
+                    .finally(() => resolve(Exit.failure(cause)));
+                }
+              }),
+              (value) => sync(() => {
+                if (!failed) {
+                  results[i] = value;
+                  completed++;
+                  running--;
+
+                  if (completed === index) {
+                    resolve(Exit.success(results));
+                  } else {
+                    startNext();
+                  }
+                }
+              })
+            )
+          );
+
+          running++;
+          fibers[i] = runFork(effect);
+        };
+
+        // Start initial batch of fibers up to concurrency limit
+        for (let i = 0; i < concurrency; i++) {
+          startNext();
+        }
+      });
+    })
+  }

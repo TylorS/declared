@@ -41,7 +41,7 @@ export const flatMap: {
 ): NonEmptyArray<B> => as.flatMap(f) as any;
 
 declare global {
-  interface Array<T> extends Pipeable {}
+  interface Array<T> extends Pipeable { }
 }
 
 Array.prototype.pipe = function pipe(this: Array<unknown>) {
