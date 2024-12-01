@@ -44,7 +44,7 @@ export class ErrorIterable extends Error implements Pipeable {
     return new OnceIterator(this);
   }
 
-  pipe() {
+  override pipe() {
     return pipeArguments(this, arguments);
   }
 }
@@ -58,7 +58,7 @@ export class AggregateErrorIterable extends AggregateError implements Pipeable {
     return new OnceIterator(this);
   }
 
-  pipe() {
+  override pipe() {
     return pipeArguments(this, arguments);
   }
 }

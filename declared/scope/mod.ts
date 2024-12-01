@@ -51,7 +51,9 @@ class ScopeImpl implements Scope {
 
   close(exit: Exit<unknown, unknown>): Effect.Effect<never, never, unknown> {
     return Effect.gen(this, async function* () {
-      for (const finalizer of Array.from(this.finalizers).reverse()) {
+      const finalizers = Array.from(this.finalizers).reverse();
+      this.finalizers.clear();
+      for (const finalizer of finalizers) {
         yield* finalizer(exit).pipe(Effect.exit);
       }
       await this.disposable[Symbol.asyncDispose]();

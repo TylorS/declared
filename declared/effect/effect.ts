@@ -380,7 +380,7 @@ export const suspend = <R, E, A>(f: () => Effect<R, E, A>): Effect<R, E, A> =>
     return yield* f();
   });
 
-export const sync = <R, E, A>(f: () => A): Effect<R, E, A> =>
+export const sync = <A>(f: () => A): Effect<never, never, A> =>
   // deno-lint-ignore require-yield
   gen(async function* () {
     return f();

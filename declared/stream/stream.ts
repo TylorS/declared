@@ -3,11 +3,12 @@ import { Unexpected } from "@declared/cause";
 import * as Context from "@declared/context";
 import * as Disposable from "@declared/disposable";
 import type { Duration } from "@declared/duration";
-import * as Exit from "@declared/exit";
 import * as Effect from "@declared/effect";
+import * as Exit from "@declared/exit";
+import { type Pipeable, pipeArguments } from "@declared/pipeable";
+import * as Scope from "@declared/scope";
 import * as Sink from "./sink.ts";
 import * as Task from "./task.ts";
-import { type Pipeable, pipeArguments } from "@declared/pipeable";
 
 export abstract class Stream<out R, out E, out A> implements Pipeable {
   abstract run<AdditionalResources = never>(
@@ -20,13 +21,14 @@ export abstract class Stream<out R, out E, out A> implements Pipeable {
   };
 }
 
+class Make<R, E, A> extends Stream<R, E, A> {
+  constructor(readonly run: Stream<R, E, A>["run"]) {
+    super();
+  }
+}
+
 export function make<R, E, A>(run: Stream<R, E, A>["run"]): Stream<R, E, A> {
-  return {
-    run,
-    pipe() {
-      return pipeArguments(this, arguments);
-    },
-  };
+  return new Make(run);
 }
 
 class Of<const A> extends Stream<never, never, A> {
@@ -66,7 +68,7 @@ export function fromIterable<A>(
   );
 }
 
-export function failCause<E>(cause: Cause.Cause<E>): Stream<never, E, never> {
+export function failure<E>(cause: Cause.Cause<E>): Stream<never, E, never> {
   return make((sink, runtime) =>
     runtime.scheduler.asap(
       Task.andThen(Task.propagateError(sink, cause), () => sink.end()),
@@ -75,11 +77,11 @@ export function failCause<E>(cause: Cause.Cause<E>): Stream<never, E, never> {
 }
 
 export function expected<E>(error: E): Stream<never, E, never> {
-  return failCause(Cause.expected(error));
+  return failure(Cause.expected(error));
 }
 
 export function unexpected(error: unknown): Stream<never, never, never> {
-  return failCause(Cause.unexpected(error));
+  return failure(Cause.unexpected(error));
 }
 
 export function never(): Stream<never, never, never> {
@@ -409,9 +411,7 @@ class FlatMapConcurrently<R, E, A, R2, E2, B>
           Sink.make(
             sink.error,
             sink.event,
-            () => {
-              return inner.close(Exit.void).run(innerRuntime);
-            },
+            () => inner.close(Exit.void).run(innerRuntime),
           ),
           { ...runtime, scope: inner },
         ),
@@ -444,8 +444,8 @@ class FlatMapConcurrently<R, E, A, R2, E2, B>
 
 export const flatMapConcurrently =
   <A, R2, E2, B>(f: (a: A) => Stream<R2, E2, B>, concurrency: number) =>
-  <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
-    new FlatMapConcurrently(stream, f, concurrency);
+    <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
+      new FlatMapConcurrently(stream, f, concurrency);
 
 export interface StreamFiber<E> extends AsyncDisposable {
   readonly exit: Promise<Exit.Exit<E, void>>;
@@ -458,16 +458,17 @@ export function makeRunFork<R>(
 ) {
   return <E, A>(stream: Stream<R, E, A>): StreamFiber<E> => {
     const { promise, resolve } = Promise.withResolvers<Exit.Exit<E, void>>();
-    const d = Disposable.settable();
+    const scope = runtime.scope.extend();
+    const innerRuntime = { ...runtime, scope };
 
     const onExit = (exit: Exit.Exit<E, void>) =>
-      Disposable.dispose(d).then(
+      scope.close(exit).run(innerRuntime).then(
         () => resolve(exit),
         (u) =>
           resolve(exit.pipe(Exit.appendCause<never>(new Cause.Unexpected(u)))),
       );
 
-    d.add(stream.run(
+    scope.addDisposable(stream.run(
       Sink.make(
         (cause) => onExit(new Exit.Failure(cause)),
         constVoid,
@@ -478,7 +479,9 @@ export function makeRunFork<R>(
 
     return {
       exit: promise,
-      [Symbol.asyncDispose]: () => Disposable.dispose(d),
+      [Symbol.asyncDispose]: async () => {
+        await scope.close(Exit.interrupted()).run(runtime)
+      },
     };
   };
 }
@@ -495,7 +498,7 @@ export function makeToArray<R>(
     const d = stream.run(
       Sink.make(
         (cause) => onExit(Exit.failure(cause)),
-        (a) => events.push(a),
+        (a) => { events.push(a) },
         () => onExit(Exit.void),
       ),
       runtime,
@@ -523,20 +526,20 @@ export const toArray: <E, A>(stream: Stream<never, E, A>) => Promise<A[]> =
   makeToArray(Effect.defaultRuntime);
 
 export const provideContext = <R2>(provided: Context.Context<R2>) =>
-<R, E, A>(
-  stream: Stream<R, E, A>,
-): Stream<Exclude<R, R2>, E, A> =>
-  make((sink, runtime) =>
-    stream.run(
-      sink,
-      {
-        ...runtime,
-        context: runtime.context.pipe(
-          Context.merge(provided),
-        ) as Context.Context<R>,
-      },
-    )
-  );
+  <R, E, A>(
+    stream: Stream<R, E, A>,
+  ): Stream<Exclude<R, R2>, E, A> =>
+    make((sink, runtime) =>
+      stream.run(
+        sink,
+        {
+          ...runtime,
+          context: runtime.context.pipe(
+            Context.merge(provided),
+          ) as Context.Context<R>,
+        },
+      )
+    );
 
 export const fromEffect = <R, E, A>(
   effect: Effect.Effect<R, E, A>,
@@ -558,141 +561,221 @@ export const fromEffect = <R, E, A>(
 
 export const mapEffect =
   <A, R2, E2, B>(f: (a: A) => Effect.Effect<R2, E2, B>) =>
-  <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
-    stream.pipe(flatMap((a: A) => fromEffect(f(a))));
+    <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
+      stream.pipe(flatMap((a: A) => fromEffect(f(a))));
 
 export const mapEffectConcurrently = <R, E, A, R2, E2, B>(
   f: (a: A) => Effect.Effect<R2, E2, B>,
   concurrency: number,
 ) =>
-(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
-  stream.pipe(flatMapConcurrently((a: A) => fromEffect(f(a)), concurrency));
+  (stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
+    stream.pipe(flatMapConcurrently((a: A) => fromEffect(f(a)), concurrency));
 
 export const switchMapEffect =
   <A, R2, E2, B>(f: (a: A) => Effect.Effect<R2, E2, B>) =>
-  <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
-    stream.pipe(switchMap((a: A) => fromEffect(f(a))));
+    <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
+      stream.pipe(switchMap((a: A) => fromEffect(f(a))));
 
 export const exhaustMapEffect =
   <A, R2, E2, B>(f: (a: A) => Effect.Effect<R2, E2, B>) =>
-  <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
-    stream.pipe(exhaustMap((a: A) => fromEffect(f(a))));
+    <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
+      stream.pipe(exhaustMap((a: A) => fromEffect(f(a))));
 
 export const exhaustLatestMapEffect =
   <A, R2, E2, B>(f: (a: A) => Effect.Effect<R2, E2, B>) =>
-  <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
-    stream.pipe(exhaustLatestMap((a: A) => fromEffect(f(a))));
+    <R, E>(stream: Stream<R, E, A>): Stream<R | R2, E | E2, B> =>
+      stream.pipe(exhaustLatestMap((a: A) => fromEffect(f(a))));
 
 export const catchAll =
   <E, R2, E2, B>(f: (cause: Cause.Cause<E>) => Stream<R2, E2, B>) =>
-  <R, A>(stream: Stream<R, E, A>): Stream<R | R2, E2, A | B> =>
-    make((sink, runtime) => {
-      const d = Disposable.settable();
-      let innerCount = 0;
-      let outerEnded = false;
+    <R, A>(stream: Stream<R, E, A>): Stream<R | R2, E2, A | B> =>
+      make((sink, runtime) => {
+        const d = Disposable.settable();
+        let innerCount = 0;
+        let outerEnded = false;
 
-      d.add(stream.run(
-        Sink.make(
-          (cause) => {
-            const innerDisposable = d.extend();
-            innerCount++;
+        d.add(stream.run(
+          Sink.make(
+            (cause) => {
+              const innerDisposable = d.extend();
+              innerCount++;
 
-            innerDisposable.add(
-              f(cause).run(
-                Sink.make(
-                  async (cause) => {
-                    await Disposable.dispose(d);
-                    sink.error(cause);
-                  },
-                  sink.event,
-                  async () => {
-                    await Disposable.dispose(innerDisposable);
-                    innerCount--;
-                    if (outerEnded && innerCount === 0) {
-                      sink.end();
-                    }
-                  },
+              innerDisposable.add(
+                f(cause).run(
+                  Sink.make(
+                    async (cause) => {
+                      await Disposable.dispose(d);
+                      sink.error(cause);
+                    },
+                    sink.event,
+                    async () => {
+                      await Disposable.dispose(innerDisposable);
+                      innerCount--;
+                      if (outerEnded && innerCount === 0) {
+                        sink.end();
+                      }
+                    },
+                  ),
+                  runtime,
                 ),
-                runtime,
-              ),
-            );
-          },
-          sink.event,
-          async () => {
-            outerEnded = true;
-            if (innerCount === 0) {
-              await Disposable.dispose(d);
-              sink.end();
-            }
-          },
-        ),
-        runtime,
-      ));
+              );
+            },
+            sink.event,
+            async () => {
+              outerEnded = true;
+              if (innerCount === 0) {
+                await Disposable.dispose(d);
+                sink.end();
+              }
+            },
+          ),
+          runtime,
+        ));
 
-      return d;
-    });
+        return d;
+      });
 
 export const catchError =
   <E, R2, E2, B>(f: (error: E) => Stream<R2, E2, B>) =>
-  <R, A>(stream: Stream<R, E, A>): Stream<R | R2, E2, A | B> =>
-    stream.pipe(catchAll(Cause.expectedOrNever(
-      f,
-      failCause,
-    )));
+    <R, A>(stream: Stream<R, E, A>): Stream<R | R2, E2, A | B> =>
+      stream.pipe(catchAll(Cause.expectedOrNever(
+        f,
+        failure,
+      )));
 
 export const matchAll = <E, R2, E2, B, A, R3, E3, C>(
   onFailure: (cause: Cause.Cause<E>) => Stream<R2, E2, B>,
   onSuccess: (value: A) => Stream<R3, E3, C>,
 ) =>
-<R>(stream: Stream<R, E, A>): Stream<R | R2 | R3, E2 | E3, B | C> =>
-  make((sink, runtime) => {
-    const scope = runtime.scope.extend();
-    const innerRuntime = { ...runtime, scope };
-    let running = 0;
-    let outerEnded = false;
+  <R>(stream: Stream<R, E, A>): Stream<R | R2 | R3, E2 | E3, B | C> =>
+    make((sink, runtime) => {
+      const scope = runtime.scope.extend();
+      const innerRuntime = { ...runtime, scope };
+      let running = 0;
+      let outerEnded = false;
 
-    const runStream = (stream: Stream<R2 | R3, E2 | E3, B | C>) => {
-      const inner = scope.extend();
-      running++;
+      const runStream = (stream: Stream<R2 | R3, E2 | E3, B | C>) => {
+        const inner = scope.extend();
+        running++;
 
-      inner.addDisposable(stream.run(
-        Sink.make(sink.error, sink.event, async () => {
-          await inner.close(Exit.void).run(innerRuntime);
-          running--;
-          if (outerEnded && running === 0) {
-            sink.end();
-          }
-        }),
-        { ...innerRuntime, scope: inner },
+        inner.addDisposable(stream.run(
+          Sink.make(sink.error, sink.event, async () => {
+            await inner.close(Exit.void).run(innerRuntime);
+            running--;
+            if (outerEnded && running === 0) {
+              sink.end();
+            }
+          }),
+          { ...innerRuntime, scope: inner },
+        ));
+      };
+
+      return scope.addDisposable(stream.run(
+        Sink.make(
+          (cause) => runStream(onFailure(cause)),
+          (value) => runStream(onSuccess(value)),
+          () => {
+            outerEnded = true;
+            if (running === 0) {
+              return sink.end();
+            }
+          },
+        ),
+        innerRuntime,
       ));
-    };
-
-    return scope.addDisposable(stream.run(
-      Sink.make(
-        (cause) => runStream(onFailure(cause)),
-        (value) => runStream(onSuccess(value)),
-        () => {
-          outerEnded = true;
-          if (running === 0) {
-            return sink.end();
-          }
-        },
-      ),
-      innerRuntime,
-    ));
-  });
+    });
 
 export const matchAllEffect = <E, R2, E2, B, A, R3, E3, C>(
   onFailure: (cause: Cause.Cause<E>) => Effect.Effect<R2, E2, B>,
   onSuccess: (value: A) => Effect.Effect<R3, E3, C>,
 ) =>
-<R>(stream: Stream<R, E, A>): Stream<R | R2 | R3, E2 | E3, B | C> =>
-  stream.pipe(matchAll(
-    (cause) => fromEffect(onFailure(cause)),
-    (value) => fromEffect(onSuccess(value)),
-  ));
+  <R>(stream: Stream<R, E, A>): Stream<R | R2 | R3, E2 | E3, B | C> =>
+    stream.pipe(matchAll(
+      (cause) => fromEffect(onFailure(cause)),
+      (value) => fromEffect(onSuccess(value)),
+    ));
 
 export const matchError =
   <E, R2, E2, B>(f: (error: E) => Stream<R2, E2, B>) =>
-  <R>(stream: Stream<R, E, B>): Stream<R | R2, E2, B> =>
-    stream.pipe(catchAll(Cause.expectedOrNever(f, failCause)));
+    <R>(stream: Stream<R, E, B>): Stream<R | R2, E2, B> =>
+      stream.pipe(catchAll(Cause.expectedOrNever(f, failure)));
+
+export const switchMatch = <E, R2, E2, B, A, R3, E3, C>(
+  onFailure: (cause: Cause.Cause<E>) => Stream<R2, E2, B>,
+  onSuccess: (value: A) => Stream<R3, E3, C>,
+) =>
+  <R>(stream: Stream<R, E, A>): Stream<R | R2 | R3, E2 | E3, B | C> =>
+    make((sink, runtime) => {
+      const scope = runtime.scope.extend();
+      const innerRuntime = { ...runtime, scope };
+      let current: Scope.Scope | undefined;
+      let outerEnded = false;
+
+      const runStream = async (stream: Stream<R2 | R3, E2 | E3, B | C>) => {
+        if (current) {
+          await current.close(Exit.interrupted()).run(innerRuntime);
+        }
+        current = runtime.scope.extend();
+        const currentRuntime = { ...innerRuntime, scope: current };
+
+        current.addDisposable(stream.run(
+          Sink.make(sink.error, sink.event, async () => {
+            if (current) {
+              await current.close(Exit.void).run(currentRuntime);
+              current = undefined;
+            }
+
+            if (outerEnded && current === undefined) {
+              sink.end();
+            }
+          }),
+          currentRuntime
+        ));
+      };
+
+      return scope.addDisposable(stream.run(
+        Sink.make(
+          (cause) => runStream(onFailure(cause)),
+          (value) => runStream(onSuccess(value)),
+          () => {
+            outerEnded = true;
+            if (current === undefined) {
+              return sink.end();
+            }
+          },
+        ),
+        innerRuntime
+      ));
+    });
+
+export const switchMatchEffect = <E, R2, E2, B, A, R3, E3, C>(
+  onFailure: (cause: Cause.Cause<E>) => Effect.Effect<R2, E2, B>,
+  onSuccess: (value: A) => Effect.Effect<R3, E3, C>,
+) =>
+  <R>(stream: Stream<R, E, A>): Stream<R | R2 | R3, E2 | E3, B | C> =>
+    stream.pipe(switchMatch(
+      (cause) => fromEffect(onFailure(cause)),
+      (value) => fromEffect(onSuccess(value)),
+    ));
+
+export const switchMatchError =
+  <E, R2, E2, B, A, R3, E3, C>(
+    onError: (error: E) => Stream<R2, E2, B>,
+    onSuccess: (value: A) => Stream<R3, E3, C>,
+  ) =>
+    <R>(stream: Stream<R, E, A>): Stream<R | R2 | R3, E2 | E3, B | C> =>
+      stream.pipe(switchMatch(
+        Cause.expectedOrNever(onError, failure),
+        onSuccess,
+      ));
+
+export const switchMatchErrorEffect =
+  <E, R2, E2, B, A, R3, E3, C>(
+    onError: (error: E) => Effect.Effect<R2, E2, B>,
+    onSuccess: (value: A) => Effect.Effect<R3, E3, C>,
+  ) =>
+    <R>(stream: Stream<R, E, A>): Stream<R | R2 | R3, E2 | E3, B | C> =>
+      stream.pipe(switchMatchEffect(
+        Cause.expectedOrNever(onError, Effect.failure),
+        onSuccess,
+      ));

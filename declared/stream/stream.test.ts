@@ -162,7 +162,7 @@ Deno.test("Stream error handling", async (t) => {
     await assertRejects(
       () =>
         Stream.run(
-          Stream.failCause(cause),
+          Stream.failure(cause),
         ),
       Cause.Unexpected,
       "test error",

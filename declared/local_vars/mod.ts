@@ -13,7 +13,7 @@ export interface LocalVars {
 }
 
 class LocalVarsImpl implements LocalVars {
-  constructor(readonly variables: Map<LocalVar<any>, Stack.Stack<any>>) {}
+  constructor(readonly variables: Map<LocalVar<any>, Stack.Stack<any>>) { }
 
   get<T>(variable: LocalVar<T>): T {
     let stack = this.variables.get(variable);
@@ -60,10 +60,9 @@ class LocalVarsImpl implements LocalVars {
 
   fork(): LocalVars {
     return new LocalVarsImpl(
-      Map.map(
-        this.variables,
+      this.variables.pipe(Map.map(
         (stack, variable) => Stack.map(stack, (v) => variable.fork(v)),
-      ),
+      )),
     );
   }
 
@@ -91,4 +90,4 @@ export function make(): LocalVars {
 }
 
 export class GetLocalVars
-  extends AsyncIterable.Yieldable("GetLocalVars")<LocalVars> {}
+  extends AsyncIterable.Yieldable("GetLocalVars")<LocalVars> { }
