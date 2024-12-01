@@ -544,20 +544,16 @@ export const provideContext = <R2>(provided: Context.Context<R2>) =>
 export const fromEffect = <R, E, A>(
   effect: Effect.Effect<R, E, A>,
 ): Stream<R, E, A> =>
-  make((sink, runtime) => {
-    const fiber = effect.pipe(
-      Effect.matchCause(
-        (cause) => Effect.sync(() => sink.error(cause)),
-        (value) =>
-          Effect.sync(() => {
-            sink.event(value);
-            sink.end();
-          }),
-      ),
-      Effect.makeRunFork(runtime),
-    );
-    return fiber;
-  });
+  make((sink, runtime) => effect.pipe(
+    Effect.matchCause(
+      (cause) => Effect.sync(() => sink.error(cause)),
+      (value) => Effect.sync(() => {
+        sink.event(value);
+        sink.end();
+      })
+    ),
+    Effect.makeRunFork(runtime)
+  ));
 
 export const mapEffect =
   <A, R2, E2, B>(f: (a: A) => Effect.Effect<R2, E2, B>) =>
